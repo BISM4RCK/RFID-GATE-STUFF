@@ -1,0 +1,17 @@
+/* Smart Gate v32 - ESP32 + dual MFRC522 + MQTT telemetry + HTTPS authorization. BISM4RCK-KUN3H0 2026 */
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+const char* WIFI_SSID="TP_link1";const char* WIFI_PASSWORD="Benq2877";const char* BASE_URL="https://gate.kunehobatumbakal.site/smart-gate";const char* DEVICE_ID="180503";const char* DEVICE_KEY="2jGpAbQGBVW9qJU89UQjDxNAjNMtj2q-JsuvL9dE8Ig";const char* MQTT_HOST="CHANGE_ME_MQTT_BROKER";const uint16_t MQTT_PORT=1883;
+constexpr uint8_t SCK_PIN=18,MOSI_PIN=23,MISO_PIN=19,RST_PIN=22,ENTRY_SS=5,ENTRY_GREEN=25,ENTRY_RED=26,EXIT_SS=16,EXIT_GREEN=32,EXIT_RED=33,SYS_GREEN=13,SYS_RED=14,RELAY=27;constexpr uint32_t GATE_MS=2500,LED_MS=1500;constexpr uint16_t COOLDOWN=650;
+MFRC522 entry(ENTRY_SS,RST_PIN),exitReader(EXIT_SS,RST_PIN);WiFiClientSecure tls;WiFiClient mqttNet;PubSubClient mqtt(mqttNet);unsigned long gateUntil=0,eLed=0,xLed=0,lastE=0,lastX=0;
+String uid(MFRC522&r){String s="";for(byte i=0;i<r.uid.size;i++){if(r.uid.uidByte[i]<16)s+='0';s+=String(r.uid.uidByte[i],HEX);}s.toUpperCase();return s;}
+void gate(){digitalWrite(RELAY,HIGH);gateUntil=millis()+GATE_MS;}void leds(bool entryGate,bool ok){uint8_t g=entryGate?ENTRY_GREEN:EXIT_GREEN,r=entryGate?ENTRY_RED:EXIT_RED;digitalWrite(g,ok);digitalWrite(r,!ok);if(entryGate)eLed=millis()+LED_MS;else xLed=millis()+LED_MS;}
+void mqttEvent(const String&reader,const String&u){if(!mqtt.connected())return;String topic="smartgate/"+String(DEVICE_ID)+"/rfid/"+reader;String payload="{\"uid\":\""+u+"\",\"reader\":\""+reader+"\"}";mqtt.publish(topic.c_str(),payload.c_str());}
+bool authorize(const String&reader,const String&u){tls.setInsecure();HTTPClient h;String url=String(BASE_URL)+"/api/esp32/rfid/scan";if(!h.begin(tls,url))return false;h.addHeader("Content-Type","application/x-www-form-urlencoded");h.addHeader("X-SmartGate-Device",DEVICE_KEY);int code=h.POST("device_id="+String(DEVICE_ID)+"&rfid_uid="+u+"&reader="+reader);String body=h.getString();h.end();return code>=200&&code<300&&body.indexOf("\"gate_opened\":true")>=0;}
+void scan(const char*name,MFRC522&r,bool entryGate,unsigned long&last){if(millis()-last<COOLDOWN||!r.PICC_IsNewCardPresent()||!r.PICC_ReadCardSerial())return;last=millis();String u=uid(r);mqttEvent(name,u);bool ok=authorize(name,u);leds(entryGate,ok);if(ok)gate();r.PICC_HaltA();r.PCD_StopCrypto1();}
+void setup(){pinMode(ENTRY_GREEN,OUTPUT);pinMode(ENTRY_RED,OUTPUT);pinMode(EXIT_GREEN,OUTPUT);pinMode(EXIT_RED,OUTPUT);pinMode(SYS_GREEN,OUTPUT);pinMode(SYS_RED,OUTPUT);pinMode(RELAY,OUTPUT);SPI.begin(SCK_PIN,MISO_PIN,MOSI_PIN);entry.PCD_Init();exitReader.PCD_Init();entry.PCD_SetAntennaGain(MFRC522::RxGain_max);exitReader.PCD_SetAntennaGain(MFRC522::RxGain_max);WiFi.mode(WIFI_STA);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);tls.setInsecure();mqtt.setServer(MQTT_HOST,MQTT_PORT);}
+void loop(){if(WiFi.status()!=WL_CONNECTED){digitalWrite(SYS_GREEN,LOW);digitalWrite(SYS_RED,HIGH);delay(50);return;}digitalWrite(SYS_GREEN,HIGH);digitalWrite(SYS_RED,LOW);if(!mqtt.connected())mqtt.connect((String("smartgate-")+DEVICE_ID).c_str());mqtt.loop();scan("entry",entry,true,lastE);scan("exit",exitReader,false,lastX);if(gateUntil&&millis()>=gateUntil){digitalWrite(RELAY,LOW);gateUntil=0;}if(eLed&&millis()>=eLed){digitalWrite(ENTRY_GREEN,LOW);digitalWrite(ENTRY_RED,LOW);eLed=0;}if(xLed&&millis()>=xLed){digitalWrite(EXIT_GREEN,LOW);digitalWrite(EXIT_RED,LOW);xLed=0;}delay(5);}

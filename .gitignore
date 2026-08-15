@@ -1,0 +1,74 @@
+# ============================================================
+# Smart Gate - Git Ignore
+# ============================================================
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# Kuneho private feature / development documentation
+KUN3H0_DEV_FUNCTIONALITY.md
+KUNEHO_FEATURE_VALIDATION.md
+
+# Migration-only documentation / source
+MIGRATION_STATUS.md
+legacy-source/
+
+# Laravel generated / local files
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/storage/*.key
+backend/storage/app/public/*
+backend/storage/framework/cache/*
+backend/storage/framework/sessions/*
+backend/storage/framework/testing/*
+backend/storage/framework/views/*
+backend/storage/logs/*
+backend/bootstrap/cache/*
+
+# PHP dependencies
+backend/vendor/
+
+# Node dependencies and build output
+frontend/node_modules/
+frontend/dist/
+backend/node_modules/
+backend/dist/
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker local overrides / runtime data
+docker-compose.override.yml
+*.pid
+
+# ESP32 / Arduino generated files
+esp32/**/.pio/
+esp32/**/.vscode/
+esp32/**/build/
+esp32/**/Debug/
+
+# PHPUnit / coverage
+.phpunit.result.cache
+coverage/
+
+# Temporary archives / exports
+*.zip
+*.tar
+*.tar.gz
+*.tmp
