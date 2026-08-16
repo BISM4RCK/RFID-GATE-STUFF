@@ -1,17 +1,36 @@
 <?php
 use Illuminate\Support\Facades\Route;
+use Illuminate\Session\Middleware\StartSession;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\GateController;
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\VisitorController;
 use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\RfidController;
+use App\Http\Controllers\Api\StaffController;
 Route::get('/health', fn()=>['ok'=>true,'service'=>'smart-gate','version'=>'32']);
-Route::middleware('web')->group(function(){
+Route::middleware([StartSession::class])->group(function(){
     Route::post('/auth/login',[AuthController::class,'login']);
     Route::post('/auth/logout',[AuthController::class,'logout']);
     Route::get('/auth/me',[AuthController::class,'me']);
     Route::get('/dashboard',[AccountController::class,'dashboard']);
+    Route::get('/staff/overview',[StaffController::class,'overview']);
+    Route::get('/staff/logs',[StaffController::class,'logs']);
+    Route::get('/staff/blacklist',[StaffController::class,'blacklist']);
+    Route::post('/staff/blacklist',[StaffController::class,'addBlacklist']);
+    Route::delete('/staff/blacklist/{id}',[StaffController::class,'removeBlacklist']);
+    Route::get('/staff/walkins',[StaffController::class,'walkIns']);
+    Route::post('/staff/walkins',[StaffController::class,'addWalkIn']);
+    Route::post('/staff/visitor-scan',[StaffController::class,'scanVisitor']);
+    Route::get('/admin/users',[StaffController::class,'users']);
+    Route::get('/admin/vehicles',[StaffController::class,'vehicles']);
+    Route::get('/admin/rfid-cards',[StaffController::class,'rfidCards']);
+    Route::get('/admin/account-logs',[StaffController::class,'accountLogs']);
+    Route::get('/resident/visitor-requests',[VisitorController::class,'requests']);
+    Route::post('/resident/visitor-requests/{id}/approve',[VisitorController::class,'approve']);
+    Route::post('/resident/visitor-requests/{id}/reject',[VisitorController::class,'reject']);
+    Route::post('/resident/visitors',[VisitorController::class,'preRegister']);
+    Route::post('/gate/override/{command}/acknowledge',[GateController::class,'acknowledge']);
     Route::get('/vehicles',[VehicleController::class,'index']);
     Route::post('/vehicles',[VehicleController::class,'store']);
     Route::delete('/vehicles/{vehicle}',[VehicleController::class,'destroy']);
@@ -19,6 +38,7 @@ Route::middleware('web')->group(function(){
     Route::get('/gate/status',[GateController::class,'status']);
     Route::post('/gate/override',[GateController::class,'override']);
 });
+Route::post('/visitor',[VisitorController::class,'create']);
 Route::get('/visitor/{credential}',[VisitorController::class,'status']);
 Route::prefix('esp32')->group(function(){
     Route::post('/rfid/scan',[RfidController::class,'scan']);

@@ -45,7 +45,7 @@ set_env() {
 set_env APP_NAME "${APP_NAME:-Smart Gate}"
 set_env APP_ENV "${APP_ENV:-production}"
 set_env APP_DEBUG "${APP_DEBUG:-false}"
-set_env APP_URL "${APP_URL:-http://localhost:8080/smart-gate}"
+set_env APP_URL "${APP_URL:-https://gate.kunehobatumbakal.site/}"
 set_env DB_CONNECTION "${DB_CONNECTION:-mysql}"
 set_env DB_HOST "${DB_HOST:-mysql}"
 set_env DB_PORT "${DB_PORT:-3306}"
@@ -56,6 +56,20 @@ set_env DB_PASSWORD "${DB_PASSWORD:-change-me}"
 if [ -z "$(grep '^APP_KEY=' .env | cut -d= -f2-)" ]; then
     php artisan key:generate --force --no-interaction
 fi
+
+# Laravel's configuration reads process environment before .env. The Compose
+# env_file intentionally does not contain APP_KEY, so the generated value can
+# be loaded from the physical .env file for every subsequent Artisan command.
+APP_KEY_VALUE=$(grep '^APP_KEY=' .env | cut -d= -f2-)
+if [ -z "$APP_KEY_VALUE" ]; then
+    echo 'ERROR: APP_KEY was not generated.' >&2
+    exit 1
+fi
+
+# Fail early with a useful message if the Laravel application key is still unavailable.
+# Do not use Laravel Tinker here: it is a development-only package and is not
+# installed in this production image.
+php -r "require 'vendor/autoload.php'; \$app=require 'bootstrap/app.php'; \$app->make(Illuminate\\Contracts\\Console\\Kernel::class); if (!getenv('APP_KEY') && !is_file('.env')) { fwrite(STDERR, 'ERROR: Laravel environment is unavailable.\\n'); exit(1); }"
 
 php artisan config:clear --no-interaction
 php artisan route:clear --no-interaction

@@ -1,9 +1,12 @@
 {
   "name": "smart-gate-frontend",
   "private": true,
-  "version": "34.0.0",
+  "version": "43.1.0",
   "type": "module",
-  "engines": {"node": ">=22.0.0", "npm": ">=10.0.0"},
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -16,6 +19,7 @@
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "tailwindcss": "4.1.12",
-    "vite": "7.1.5"
+    "vite": "7.1.5",
+    "jsbarcode": "3.11.6"
   }
 }

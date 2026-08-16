@@ -20,6 +20,7 @@ legacy-source/
 backend/.env
 backend/.env.*
 !backend/.env.example
+!backend/.env.docker.example
 backend/storage/*.key
 backend/storage/app/public/*
 backend/storage/framework/cache/*
@@ -72,3 +73,6 @@ coverage/
 *.tar
 *.tar.gz
 *.tmp
+
+# The ZIP deployment bundle intentionally includes safe local .env defaults.
+# Do not commit these environment files to Git; they are for packaged local deployment only.

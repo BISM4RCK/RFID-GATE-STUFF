@@ -1,4 +1,325 @@
 <?php
+
 namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-class VisitorController{public function status($credential){$row=DB::table('visitor_credentials')->where('credential',strtoupper($credential))->first();if(!$row)return response()->json(['ok'=>false,'status'=>'not_found'],404);$v=DB::table('visitor_requests')->where('id',$row->visitor_request_id)->first();return ['ok'=>true,'visitor_id'=>strtoupper($credential),'status'=>$v->status??'unknown'];}}
+use Illuminate\Support\Str;
+use App\Support\ActivityLogger;
+
+class VisitorController extends Controller
+{
+    public function create(Request $request)
+    {
+        $data = $request->validate([
+            'house_number' => ['required', 'string', 'max:50'],
+            'visitor_name' => ['required', 'string', 'max:150'],
+            'contact_number' => ['nullable', 'string', 'max:30'],
+            'plate_number' => ['nullable', 'string', 'max:30'],
+            'vehicle_type' => ['nullable', 'in:car,motorcycle,truck,other'],
+            'vehicles' => ['nullable', 'array', 'max:10'],
+            'vehicles.*.plate_number' => ['required', 'string', 'max:30'],
+            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,other'],
+            'government_id' => ['nullable', 'file', 'max:10240', 'mimes:jpg,jpeg,png,pdf'],
+            'purpose_of_visit' => ['required', 'string', 'max:255'],
+            'people_count' => ['required', 'integer', 'min:1', 'max:20'],
+            'requested_visit_date' => ['nullable', 'date'],
+
+        ]);
+
+        $vehicles = $data['vehicles'] ?? [];
+        if (!$vehicles && !empty($data['plate_number'])) {
+            $vehicles = [['plate_number' => $data['plate_number'], 'vehicle_type' => $data['vehicle_type'] ?? 'other']];
+        }
+        if (count($vehicles) < 1 || count($vehicles) > 10) {
+            return response()->json(['ok' => false, 'message' => 'Add between 1 and 10 vehicles.'], 422);
+        }
+        $plates = array_map(fn($v) => strtoupper(trim($v['plate_number'])), $vehicles);
+        if (count($plates) !== count(array_unique($plates))) {
+            return response()->json(['ok' => false, 'message' => 'Vehicle plate numbers must be unique.'], 422);
+        }
+
+        $resident = DB::table('residents')
+            ->where('house_number', $data['house_number'])
+            ->where('status', 'active')
+            ->first();
+
+        if (!$resident) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'That resident house number could not be found.',
+            ], 422);
+        }
+
+        $credential = null;
+
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $candidate = strtoupper(Str::random(6));
+
+            if (!DB::table('visitor_credentials')->where('visitor_id', $candidate)->exists()) {
+                $credential = $candidate;
+                break;
+            }
+        }
+
+        if (!$credential) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Unable to generate a visitor credential. Please try again.',
+            ], 500);
+        }
+
+        $requestId = DB::transaction(function () use ($data, $resident, $credential, $vehicles, $request) {
+            $id = DB::table('visitor_requests')->insertGetId([
+                'resident_id' => $resident->id,
+                'house_number' => $resident->house_number,
+                'visitor_name' => $data['visitor_name'],
+                'contact_number' => $data['contact_number'] ?? null,
+                'plate_number' => strtoupper($vehicles[0]['plate_number']),
+                'vehicle_type' => $vehicles[0]['vehicle_type'],
+                'purpose_of_visit' => $data['purpose_of_visit'],
+                'people_count' => $data['people_count'],
+                'status' => 'pending',
+                'requested_visit_date' => $data['requested_visit_date'] ?? null,
+                'qr_reference' => 'GH-' . $credential,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $token = Str::random(48);
+
+            DB::table('visitor_credentials')->insert([
+                'visitor_request_id' => $id,
+                'visitor_id' => $credential,
+                'qr_token_hash' => hash('sha256', $token),
+                'barcode_token_hash' => hash('sha256', $token),
+                'qr_token' => $token,
+                'barcode_token' => $token,
+                'created_at' => now(),
+            ]);
+
+            DB::table('visitor_request_vehicles')->insert([
+                'visitor_request_id' => $id,
+                'plate_number' => strtoupper($vehicles[0]['plate_number']),
+                'vehicle_type' => $vehicles[0]['vehicle_type'],
+                'people_count' => $data['people_count'],
+                'created_at' => now(),
+            ]);
+            foreach ($vehicles as $vehicle) {
+                if (strtoupper($vehicle['plate_number']) === strtoupper($vehicles[0]['plate_number'])) continue;
+                DB::table('visitor_request_vehicles')->insert([
+                    'visitor_request_id' => $id,
+                    'plate_number' => strtoupper($vehicle['plate_number']),
+                    'vehicle_type' => $vehicle['vehicle_type'],
+                    'people_count' => $data['people_count'],
+                    'created_at' => now(),
+                ]);
+            }
+            if ($request->hasFile('government_id')) {
+                $file = $request->file('government_id');
+                $path = $file->store('visitor-ids');
+                DB::table('visitor_attachments')->insert([
+                    'visitor_request_id' => $id,
+                    'file_type' => 'government_id',
+                    'file_path' => $path,
+                    'original_filename' => $file->getClientOriginalName(),
+                    'mime_type' => $file->getMimeType(),
+                    'file_size' => $file->getSize(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+            return $id;
+        });
+
+        return response()->json([
+            'ok' => true,
+            'visitor_id' => $credential,
+            'request_id' => $requestId,
+            'status' => 'pending',
+        ], 201);
+    }
+
+    public function preRegister(Request $request)
+    {
+        [$user, $residentId] = $this->residentUser($request);
+
+        $data = $request->validate([
+            'visitor_name' => ['required', 'string', 'max:150'],
+            'contact_number' => ['nullable', 'string', 'max:30'],
+            'purpose_of_visit' => ['required', 'string', 'max:255'],
+            'people_count' => ['required', 'integer', 'min:1', 'max:20'],
+            'vehicles' => ['required', 'array', 'min:1', 'max:10'],
+            'vehicles.*.plate_number' => ['required', 'string', 'max:30'],
+            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,other'],
+            'government_id' => ['nullable', 'file', 'max:10240', 'mimes:jpg,jpeg,png,pdf'],
+        ]);
+
+        $resident = DB::table('residents')->where('id', $residentId)->where('status', 'active')->first();
+        abort_unless($resident, 403, 'Resident profile not found.');
+
+        $plates = array_map(fn($v) => strtoupper(trim($v['plate_number'])), $data['vehicles']);
+        if (count($plates) !== count(array_unique($plates))) {
+            return response()->json(['ok' => false, 'message' => 'Vehicle plate numbers must be unique.'], 422);
+        }
+
+        $credential = $this->generateCredential();
+
+        $requestId = DB::transaction(function () use ($data, $resident, $user, $residentId, $credential, $request) {
+            $id = DB::table('visitor_requests')->insertGetId([
+                'resident_id' => $residentId,
+                'house_number' => $resident->house_number,
+                'visitor_name' => $data['visitor_name'],
+                'contact_number' => $data['contact_number'] ?? null,
+                'plate_number' => strtoupper($data['vehicles'][0]['plate_number']),
+                'vehicle_type' => $data['vehicles'][0]['vehicle_type'],
+                'purpose_of_visit' => $data['purpose_of_visit'],
+                'people_count' => $data['people_count'],
+                'status' => 'approved',
+                'approved_by' => $user->id,
+                'approved_at' => now(),
+                'qr_reference' => 'GH-' . $credential,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $token = Str::random(48);
+            DB::table('visitor_credentials')->insert([
+                'visitor_request_id' => $id,
+                'visitor_id' => $credential,
+                'qr_token_hash' => hash('sha256', $token),
+                'barcode_token_hash' => hash('sha256', $token),
+                'qr_token' => $token,
+                'barcode_token' => $token,
+                'created_at' => now(),
+            ]);
+
+            foreach ($data['vehicles'] as $vehicle) {
+                DB::table('visitor_request_vehicles')->insert([
+                    'visitor_request_id' => $id,
+                    'plate_number' => strtoupper($vehicle['plate_number']),
+                    'vehicle_type' => $vehicle['vehicle_type'],
+                    'people_count' => $data['people_count'],
+                    'created_at' => now(),
+                ]);
+            }
+
+            if ($request->hasFile('government_id')) {
+                $file = $request->file('government_id');
+                $path = $file->store('visitor-ids');
+                DB::table('visitor_attachments')->insert([
+                    'visitor_request_id' => $id,
+                    'file_type' => 'government_id',
+                    'file_path' => $path,
+                    'original_filename' => $file->getClientOriginalName(),
+                    'mime_type' => $file->getMimeType(),
+                    'file_size' => $file->getSize(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+            return $id;
+        });
+
+        ActivityLogger::log($request, $user, 'pre_register_visitor', "Pre-registered visitor {$data['visitor_name']} with credential {$credential}");
+
+        return response()->json([
+            'ok' => true,
+            'visitor_id' => $credential,
+            'request_id' => $requestId,
+            'status' => 'approved',
+            'vehicles' => $data['vehicles'],
+        ], 201);
+    }
+
+    private function generateCredential(): string
+    {
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $candidate = strtoupper(Str::random(6));
+            if (!DB::table('visitor_credentials')->where('visitor_id', $candidate)->exists()) {
+                return $candidate;
+            }
+        }
+        abort(500, 'Unable to generate visitor credential.');
+    }
+
+    public function status($credential)
+    {
+        $row = DB::table('visitor_credentials')
+            ->where('visitor_id', strtoupper($credential))
+            ->first();
+
+        if (!$row) {
+            return response()->json([
+                'ok' => false,
+                'status' => 'not_found',
+            ], 404);
+        }
+
+        $visitor = DB::table('visitor_requests')
+            ->where('id', $row->visitor_request_id)
+            ->first();
+
+        return [
+            'ok' => true,
+            'visitor_id' => strtoupper($credential),
+            'status' => $visitor->status ?? 'unknown',
+        ];
+    }
+
+    private function residentUser(Request $request)
+    {
+        $user = DB::table('users')->where('id', $request->session()->get('user_id'))->first();
+        abort_unless($user && $user->role === 'resident' && $user->status === 'active', 403);
+        $residentId = DB::table('residents')->where('user_id', $user->id)->value('id');
+        abort_unless($residentId, 403, 'Resident profile not found.');
+        return [$user, $residentId];
+    }
+
+    public function requests(Request $request)
+    {
+        [, $residentId] = $this->residentUser($request);
+        return response()->json([
+            'ok' => true,
+            'requests' => DB::table('visitor_requests')->where('resident_id', $residentId)->orderByDesc('id')->limit(100)->get(),
+        ]);
+    }
+
+    public function approve(Request $request, int $id)
+    {
+        [$user, $residentId] = $this->residentUser($request);
+        $visitor = DB::table('visitor_requests')->where('id', $id)->where('resident_id', $residentId)->first();
+        abort_unless($visitor, 404, 'Visitor request not found.');
+        abort_unless($visitor->status === 'pending', 422, 'This visitor request is no longer pending.');
+
+        DB::table('visitor_requests')->where('id', $id)->update([
+            'status' => 'approved',
+            'approved_by' => $user->id,
+            'approved_at' => now(),
+            'updated_at' => now(),
+        ]);
+        ActivityLogger::log($request, $user, 'approve_visitor', "Approved visitor request #{$id} for {$visitor->visitor_name}");
+        return ['ok' => true, 'status' => 'approved'];
+    }
+
+    public function reject(Request $request, int $id)
+    {
+        [$user, $residentId] = $this->residentUser($request);
+        $visitor = DB::table('visitor_requests')->where('id', $id)->where('resident_id', $residentId)->first();
+        abort_unless($visitor, 404, 'Visitor request not found.');
+        abort_unless($visitor->status === 'pending', 422, 'This visitor request is no longer pending.');
+        $reason = $request->input('reason', 'Rejected by resident.');
+        abort_unless(is_string($reason) && mb_strlen($reason) <= 255, 422, 'Invalid rejection reason.');
+        DB::table('visitor_requests')->where('id', $id)->update([
+            'status' => 'rejected',
+            'rejected_by' => $user->id,
+            'rejected_at' => now(),
+            'rejection_reason' => $reason,
+            'updated_at' => now(),
+        ]);
+        ActivityLogger::log($request, $user, 'reject_visitor', "Rejected visitor request #{$id} for {$visitor->visitor_name}");
+        return ['ok' => true, 'status' => 'rejected'];
+    }
+
+}

@@ -1,17 +1,211 @@
-/* Smart Gate v32 - ESP32 + dual MFRC522 + MQTT telemetry + HTTPS authorization. BISM4RCK-KUN3H0 2026 */
+/* Smart Gate - ESP32 + dual MFRC522 + MQTT + HTTPS. C++/Arduino. */
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <SPI.h>
 #include <MFRC522.h>
-const char* WIFI_SSID="TP_link1";const char* WIFI_PASSWORD="Benq2877";const char* BASE_URL="https://gate.kunehobatumbakal.site/smart-gate";const char* DEVICE_ID="180503";const char* DEVICE_KEY="2jGpAbQGBVW9qJU89UQjDxNAjNMtj2q-JsuvL9dE8Ig";const char* MQTT_HOST="CHANGE_ME_MQTT_BROKER";const uint16_t MQTT_PORT=1883;
-constexpr uint8_t SCK_PIN=18,MOSI_PIN=23,MISO_PIN=19,RST_PIN=22,ENTRY_SS=5,ENTRY_GREEN=25,ENTRY_RED=26,EXIT_SS=16,EXIT_GREEN=32,EXIT_RED=33,SYS_GREEN=13,SYS_RED=14,RELAY=27;constexpr uint32_t GATE_MS=2500,LED_MS=1500;constexpr uint16_t COOLDOWN=650;
-MFRC522 entry(ENTRY_SS,RST_PIN),exitReader(EXIT_SS,RST_PIN);WiFiClientSecure tls;WiFiClient mqttNet;PubSubClient mqtt(mqttNet);unsigned long gateUntil=0,eLed=0,xLed=0,lastE=0,lastX=0;
-String uid(MFRC522&r){String s="";for(byte i=0;i<r.uid.size;i++){if(r.uid.uidByte[i]<16)s+='0';s+=String(r.uid.uidByte[i],HEX);}s.toUpperCase();return s;}
-void gate(){digitalWrite(RELAY,HIGH);gateUntil=millis()+GATE_MS;}void leds(bool entryGate,bool ok){uint8_t g=entryGate?ENTRY_GREEN:EXIT_GREEN,r=entryGate?ENTRY_RED:EXIT_RED;digitalWrite(g,ok);digitalWrite(r,!ok);if(entryGate)eLed=millis()+LED_MS;else xLed=millis()+LED_MS;}
-void mqttEvent(const String&reader,const String&u){if(!mqtt.connected())return;String topic="smartgate/"+String(DEVICE_ID)+"/rfid/"+reader;String payload="{\"uid\":\""+u+"\",\"reader\":\""+reader+"\"}";mqtt.publish(topic.c_str(),payload.c_str());}
-bool authorize(const String&reader,const String&u){tls.setInsecure();HTTPClient h;String url=String(BASE_URL)+"/api/esp32/rfid/scan";if(!h.begin(tls,url))return false;h.addHeader("Content-Type","application/x-www-form-urlencoded");h.addHeader("X-SmartGate-Device",DEVICE_KEY);int code=h.POST("device_id="+String(DEVICE_ID)+"&rfid_uid="+u+"&reader="+reader);String body=h.getString();h.end();return code>=200&&code<300&&body.indexOf("\"gate_opened\":true")>=0;}
-void scan(const char*name,MFRC522&r,bool entryGate,unsigned long&last){if(millis()-last<COOLDOWN||!r.PICC_IsNewCardPresent()||!r.PICC_ReadCardSerial())return;last=millis();String u=uid(r);mqttEvent(name,u);bool ok=authorize(name,u);leds(entryGate,ok);if(ok)gate();r.PICC_HaltA();r.PCD_StopCrypto1();}
-void setup(){pinMode(ENTRY_GREEN,OUTPUT);pinMode(ENTRY_RED,OUTPUT);pinMode(EXIT_GREEN,OUTPUT);pinMode(EXIT_RED,OUTPUT);pinMode(SYS_GREEN,OUTPUT);pinMode(SYS_RED,OUTPUT);pinMode(RELAY,OUTPUT);SPI.begin(SCK_PIN,MISO_PIN,MOSI_PIN);entry.PCD_Init();exitReader.PCD_Init();entry.PCD_SetAntennaGain(MFRC522::RxGain_max);exitReader.PCD_SetAntennaGain(MFRC522::RxGain_max);WiFi.mode(WIFI_STA);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);tls.setInsecure();mqtt.setServer(MQTT_HOST,MQTT_PORT);}
-void loop(){if(WiFi.status()!=WL_CONNECTED){digitalWrite(SYS_GREEN,LOW);digitalWrite(SYS_RED,HIGH);delay(50);return;}digitalWrite(SYS_GREEN,HIGH);digitalWrite(SYS_RED,LOW);if(!mqtt.connected())mqtt.connect((String("smartgate-")+DEVICE_ID).c_str());mqtt.loop();scan("entry",entry,true,lastE);scan("exit",exitReader,false,lastX);if(gateUntil&&millis()>=gateUntil){digitalWrite(RELAY,LOW);gateUntil=0;}if(eLed&&millis()>=eLed){digitalWrite(ENTRY_GREEN,LOW);digitalWrite(ENTRY_RED,LOW);eLed=0;}if(xLed&&millis()>=xLed){digitalWrite(EXIT_GREEN,LOW);digitalWrite(EXIT_RED,LOW);xLed=0;}delay(5);}
+
+const char* WIFI_SSID = "TP_link1";
+const char* WIFI_PASSWORD = "Benq2877";
+const char* BASE_URL = "https://gate.kunehobatumbakal.site";
+const char* DEVICE_ID = "180503";
+const char* DEVICE_KEY = "2jGpAbQGBVW9qJU89UQjDxNAjNMtj2q-JsuvL9dE8Ig";
+const char* MQTT_HOST = "CHANGE_ME_MQTT_BROKER";
+const uint16_t MQTT_PORT = 1883;
+
+constexpr uint8_t SCK_PIN=18, MOSI_PIN=23, MISO_PIN=19, RST_PIN=22;
+constexpr uint8_t ENTRY_SS=5, ENTRY_GREEN=25, ENTRY_RED=26;
+constexpr uint8_t EXIT_SS=16, EXIT_GREEN=32, EXIT_RED=33;
+constexpr uint8_t SYS_GREEN=13, SYS_RED=14, RELAY=27;
+constexpr uint32_t GATE_MS=2500, LED_MS=1500, HEARTBEAT_MS=5000, COMMAND_POLL_MS=1000;
+constexpr uint16_t COOLDOWN=650;
+
+MFRC522 entryReader(ENTRY_SS, RST_PIN);
+MFRC522 exitReader(EXIT_SS, RST_PIN);
+WiFiClientSecure tls;
+WiFiClient mqttNet;
+PubSubClient mqtt(mqttNet);
+
+unsigned long gateUntil=0, entryLedUntil=0, exitLedUntil=0;
+unsigned long lastEntryScan=0, lastExitScan=0, lastHeartbeat=0, lastCommandPoll=0;
+
+String uid(MFRC522& reader) {
+    String value;
+    for (byte i=0; i<reader.uid.size; i++) {
+        if (reader.uid.uidByte[i] < 16) value += '0';
+        value += String(reader.uid.uidByte[i], HEX);
+    }
+    value.toUpperCase();
+    return value;
+}
+
+void openGate() {
+    digitalWrite(RELAY, HIGH);
+    gateUntil = millis() + GATE_MS;
+}
+
+void setLeds(bool entryGate, bool approved) {
+    uint8_t green = entryGate ? ENTRY_GREEN : EXIT_GREEN;
+    uint8_t red = entryGate ? ENTRY_RED : EXIT_RED;
+    digitalWrite(green, approved ? HIGH : LOW);
+    digitalWrite(red, approved ? LOW : HIGH);
+    if (entryGate) entryLedUntil = millis() + LED_MS;
+    else exitLedUntil = millis() + LED_MS;
+}
+
+void mqttEvent(const String& reader, const String& value) {
+    if (!mqtt.connected()) return;
+    String topic = String("smartgate/") + DEVICE_ID + "/rfid/" + reader;
+    String payload = String("{\"uid\":\"") + value + "\",\"reader\":\"" + reader + "\"}";
+    mqtt.publish(topic.c_str(), payload.c_str());
+}
+
+bool authorize(const String& reader, const String& value) {
+    tls.setInsecure();
+    HTTPClient http;
+    String url = String(BASE_URL) + "/api/esp32/rfid/scan";
+    if (!http.begin(tls, url)) return false;
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    http.addHeader("X-SmartGate-Device", DEVICE_KEY);
+    String body = "device_id=" + String(DEVICE_ID) + "&rfid_uid=" + value + "&reader=" + reader;
+    int code = http.POST(body);
+    String response = http.getString();
+    http.end();
+    return code >= 200 && code < 300 && response.indexOf("\"gate_opened\":true") >= 0;
+}
+
+void completeCommand(const String& id) {
+    tls.setInsecure();
+    HTTPClient http;
+    String url = String(BASE_URL) + "/api/esp32/gate/commands/" + id + "/complete";
+    if (!http.begin(tls, url)) return;
+    http.addHeader("X-SmartGate-Device", DEVICE_KEY);
+    http.POST("");
+    http.end();
+}
+
+void pollCommands() {
+    tls.setInsecure();
+    HTTPClient http;
+    String url = String(BASE_URL) + "/api/esp32/gate/commands";
+    if (!http.begin(tls, url)) return;
+    http.addHeader("X-SmartGate-Device", DEVICE_KEY);
+    int code = http.GET();
+    if (code >= 200 && code < 300) {
+        String body = http.getString();
+        int pos = 0;
+        while ((pos = body.indexOf("\"id\":", pos)) >= 0) {
+            int idStart = pos + 5;
+            int idEnd = body.indexOf(',', idStart);
+            if (idEnd < 0) break;
+            String id = body.substring(idStart, idEnd);
+            int gatePos = body.indexOf("\"gate\":\"", pos);
+            int cmdPos = body.indexOf("\"command\":\"open\"", pos);
+            int nextObject = body.indexOf("}", pos);
+            if (gatePos >= 0 && (nextObject < 0 || gatePos < nextObject) && cmdPos >= 0 && (nextObject < 0 || cmdPos < nextObject)) {
+                openGate();
+                completeCommand(id);
+            }
+            pos = idEnd + 1;
+        }
+    }
+    http.end();
+}
+
+void heartbeat() {
+    tls.setInsecure();
+    HTTPClient http;
+    String url = String(BASE_URL) + "/api/esp32/heartbeat";
+    if (!http.begin(tls, url)) return;
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    http.addHeader("X-SmartGate-Device", DEVICE_KEY);
+    http.POST(String("device_id=") + DEVICE_ID);
+    http.end();
+}
+
+void scanCard(const char* readerName, MFRC522& reader, bool entryGate, unsigned long& lastScan) {
+    if (millis() - lastScan < COOLDOWN) return;
+    if (!reader.PICC_IsNewCardPresent() || !reader.PICC_ReadCardSerial()) return;
+    lastScan = millis();
+
+    String value = uid(reader);
+    mqttEvent(readerName, value);
+    bool approved = authorize(readerName, value);
+    setLeds(entryGate, approved);
+    if (approved) openGate();
+
+    reader.PICC_HaltA();
+    reader.PCD_StopCrypto1();
+}
+
+void setup() {
+    pinMode(ENTRY_GREEN, OUTPUT);
+    pinMode(ENTRY_RED, OUTPUT);
+    pinMode(EXIT_GREEN, OUTPUT);
+    pinMode(EXIT_RED, OUTPUT);
+    pinMode(SYS_GREEN, OUTPUT);
+    pinMode(SYS_RED, OUTPUT);
+    pinMode(RELAY, OUTPUT);
+    digitalWrite(RELAY, LOW);
+
+    SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
+    entryReader.PCD_Init();
+    exitReader.PCD_Init();
+    entryReader.PCD_SetAntennaGain(MFRC522::RxGain_max);
+    exitReader.PCD_SetAntennaGain(MFRC522::RxGain_max);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    tls.setInsecure();
+    mqtt.setServer(MQTT_HOST, MQTT_PORT);
+}
+
+void loop() {
+    if (WiFi.status() != WL_CONNECTED) {
+        digitalWrite(SYS_GREEN, LOW);
+        digitalWrite(SYS_RED, HIGH);
+        delay(50);
+        return;
+    }
+
+    digitalWrite(SYS_GREEN, HIGH);
+    digitalWrite(SYS_RED, LOW);
+
+    if (!mqtt.connected()) {
+        mqtt.connect((String("smartgate-") + DEVICE_ID).c_str());
+    }
+    mqtt.loop();
+
+    scanCard("entry", entryReader, true, lastEntryScan);
+    scanCard("exit", exitReader, false, lastExitScan);
+
+    if (millis() - lastHeartbeat >= HEARTBEAT_MS) {
+        lastHeartbeat = millis();
+        heartbeat();
+    }
+
+    if (millis() - lastCommandPoll >= COMMAND_POLL_MS) {
+        lastCommandPoll = millis();
+        pollCommands();
+    }
+
+    if (gateUntil && millis() >= gateUntil) {
+        digitalWrite(RELAY, LOW);
+        gateUntil = 0;
+    }
+
+    if (entryLedUntil && millis() >= entryLedUntil) {
+        digitalWrite(ENTRY_GREEN, LOW);
+        digitalWrite(ENTRY_RED, LOW);
+        entryLedUntil = 0;
+    }
+
+    if (exitLedUntil && millis() >= exitLedUntil) {
+        digitalWrite(EXIT_GREEN, LOW);
+        digitalWrite(EXIT_RED, LOW);
+        exitLedUntil = 0;
+    }
+
+    delay(5);
+}

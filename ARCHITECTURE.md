@@ -14,6 +14,6 @@
 | Containerization | Docker + Docker Compose |
 | External access | Cloudflare Tunnel |
 | RFID | MFRC522 |
-| Public URL | https://gate.kunehobatumbakal.site/smart-gate/ |
+| Public URL | https://gate.kunehobatumbakal.site/ |
 
 `legacy-source/` is an audit copy of v31. Runtime application code is under `backend/` and `esp32/`.

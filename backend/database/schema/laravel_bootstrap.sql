@@ -7,6 +7,12 @@
 -- gate_logs references walk_in_visitors, visitor_requests, vehicles, residents, and users.
 -- This order makes a fresh migration/reset safe on MySQL 8.x.
 
+DROP TABLE IF EXISTS failed_jobs;
+DROP TABLE IF EXISTS job_batches;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS cache_locks;
+DROP TABLE IF EXISTS cache;
 DROP TABLE IF EXISTS concerns;
 DROP TABLE IF EXISTS audit_logs;
 DROP TABLE IF EXISTS notifications;
@@ -40,6 +46,63 @@ DROP TABLE IF EXISTS residents;
 DROP TABLE IF EXISTS users;
 
 
+CREATE TABLE cache (
+    `key` VARCHAR(255) NOT NULL PRIMARY KEY,
+    `value` MEDIUMTEXT NOT NULL,
+    `expiration` INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE cache_locks (
+    `key` VARCHAR(255) NOT NULL PRIMARY KEY,
+    owner VARCHAR(255) NOT NULL,
+    expiration INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE sessions (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    user_id BIGINT UNSIGNED NULL,
+    ip_address VARCHAR(45) NULL,
+    user_agent TEXT NULL,
+    payload LONGTEXT NOT NULL,
+    last_activity INT NOT NULL,
+    KEY sessions_user_id_index (user_id),
+    KEY sessions_last_activity_index (last_activity)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE jobs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    queue VARCHAR(255) NOT NULL,
+    payload LONGTEXT NOT NULL,
+    attempts TINYINT UNSIGNED NOT NULL,
+    reserved_at INT UNSIGNED NULL,
+    available_at INT UNSIGNED NOT NULL,
+    created_at INT UNSIGNED NOT NULL,
+    KEY jobs_queue_index (queue)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE job_batches (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    total_jobs INT NOT NULL,
+    pending_jobs INT NOT NULL,
+    failed_jobs INT NOT NULL,
+    failed_job_ids LONGTEXT NOT NULL,
+    options MEDIUMTEXT NULL,
+    cancelled_at INT NULL,
+    created_at INT NOT NULL,
+    finished_at INT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE failed_jobs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    uuid VARCHAR(255) NOT NULL UNIQUE,
+    connection TEXT NOT NULL,
+    queue TEXT NOT NULL,
+    payload LONGTEXT NOT NULL,
+    exception LONGTEXT NOT NULL,
+    failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE users (
 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 full_name VARCHAR(150) NOT NULL,
@@ -62,6 +125,8 @@ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 user_id BIGINT UNSIGNED NOT NULL UNIQUE,
 house_number VARCHAR(50) NOT NULL UNIQUE,
 block_number VARCHAR(50) NULL,
+lot_number VARCHAR(50) NULL,
+household_letter VARCHAR(5) NULL,
 contact_number VARCHAR(30) NULL,
 emergency_contact VARCHAR(30) NULL,
 status ENUM('active',
@@ -316,6 +381,7 @@ gate_status ENUM('approved',
 'pending',
 'manual_override') NOT NULL DEFAULT 'pending',
 source_device VARCHAR(100) NULL,
+reader VARCHAR(10) NULL,
 plate_photo_path VARCHAR(255) NULL,
 vehicle_photo_path VARCHAR(255) NULL,
 raw_payload LONGTEXT NULL,
@@ -578,17 +644,7 @@ VALUES
 
 -- CUMULATIVE FEATURE SUPPORT
 -- Super admin and staff RFID vehicle support.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin TINYINT(1) NOT NULL DEFAULT 0;
-
-ALTER TABLE rfid_cards ADD COLUMN IF NOT EXISTS staff_vehicle_id BIGINT UNSIGNED NULL AFTER vehicle_id;
-
-ALTER TABLE rfid_scan_sessions ADD COLUMN IF NOT EXISTS target_staff_vehicle_id BIGINT UNSIGNED NULL AFTER target_vehicle_id;
-
 -- README intentionally untouched.
-ALTER TABLE residents ADD COLUMN IF NOT EXISTS lot_number VARCHAR(50) NULL AFTER block_number;
-
-ALTER TABLE residents ADD COLUMN IF NOT EXISTS household_letter VARCHAR(5) NULL AFTER lot_number;
-
 CREATE TABLE IF NOT EXISTS visitor_credentials(
 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 visitor_request_id BIGINT UNSIGNED NOT NULL,
@@ -604,10 +660,6 @@ UNIQUE KEY uq_qr(qr_token_hash),
 UNIQUE KEY uq_barcode(barcode_token_hash),
 CONSTRAINT fk_vc_request FOREIGN KEY(visitor_request_id) REFERENCES visitor_requests(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-ALTER TABLE visitor_credentials ADD COLUMN IF NOT EXISTS qr_token VARCHAR(255) NULL;
-
-ALTER TABLE visitor_credentials ADD COLUMN IF NOT EXISTS barcode_token VARCHAR(255) NULL;
 
 CREATE TABLE IF NOT EXISTS account_activity_logs(
 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -625,10 +677,6 @@ KEY idx_action(action),
 KEY idx_created(created_at),
 CONSTRAINT fk_activity_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-ALTER TABLE account_activity_logs ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45) NULL;
-
-ALTER TABLE account_activity_logs ADD COLUMN IF NOT EXISTS user_agent TEXT NULL;
 
 CREATE TABLE IF NOT EXISTS gate_commands(
 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -659,8 +707,6 @@ KEY idx_user(user_id),
 KEY idx_plate(plate_number),
 CONSTRAINT fk_user_vehicle_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-ALTER TABLE user_vehicles ADD COLUMN IF NOT EXISTS color VARCHAR(50) NULL;
 
 INSERT INTO users (full_name,
 email,
@@ -755,13 +801,7 @@ SHA2('GHBC-DEMO02',
 -- BISM4RCK-KUN3H0 2026
 
 -- RFID and gate-reader limits / reader location.
-ALTER TABLE gate_logs ADD COLUMN IF NOT EXISTS reader VARCHAR(10) NULL AFTER source_device;
-
 -- RFID resident vehicle association.
-ALTER TABLE rfid_cards ADD COLUMN IF NOT EXISTS vehicle_id BIGINT UNSIGNED NULL;
-
-ALTER TABLE rfid_scan_sessions ADD COLUMN IF NOT EXISTS target_vehicle_id BIGINT UNSIGNED NULL;
-
 -- Demo expansion and protected KUN3H0 super admin.
 INSERT INTO users (full_name, email, password, role, status, is_super_admin)
 SELECT 'KUN3H0', 'kun3h0@goldenhomes.local', '$2y$12$aWCsIYAvqFexuRYPx.IiaOKsITxZjy/V1b2Vx7gRto45pUZpams/q', 'admin', 'active', 1
@@ -1002,3 +1042,32 @@ SELECT @admin2_user_id,'ADM2 1002','motorcycle','Deep Red'
 WHERE @admin2_user_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM user_vehicles WHERE plate_number='ADM2 1002');
 
 -- BISM4RCK-KUN3H0 2026
+
+
+-- Demo credentials normalized for Smart Gate v47.
+UPDATE users SET password='$2y$12$U/fVbHa5pOjlBTwFEP9.fOmxj4rdMaQkrIf2cxidLrNDNLBjEpgve' WHERE email IN (
+    'resident@goldenhomes.local',
+    'resident2@goldenhomes.local',
+    'resident3@goldenhomes.local',
+    'resident4@goldenhomes.local',
+    'resident5@goldenhomes.local'
+);
+
+UPDATE users SET password='$2y$12$93sScaYynNzoUYKKjXl9k.5fhPqrnWjnv62DtNILLDVelcCGwiNfu' WHERE email IN (
+    'guard@goldenhomes.local',
+    'guard2@goldenhomes.local',
+    'guard3@goldenhomes.local'
+);
+
+UPDATE users SET password='$2y$12$/Q0DaexlZwrfktGy8rYnL.WHXk8i1DV8DwUS5rENAiinXOXzUXgga' WHERE email IN (
+    'admin@goldenhomes.local',
+    'admin2@goldenhomes.local'
+);
+
+INSERT INTO users (full_name, email, password, role, status, is_super_admin)
+SELECT 'KUN3H0', 'kun3h0@goldenhomes.local', '$2y$12$ecYq3mgF9q69SkoyUqrzpe0ZCPJL5hrl6No.ETei5mjm17YdXTaDO', 'admin', 'active', 1
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE email='kun3h0@goldenhomes.local');
+
+UPDATE users
+SET full_name='KUN3H0', role='admin', status='active', is_super_admin=1, password='$2y$12$ecYq3mgF9q69SkoyUqrzpe0ZCPJL5hrl6No.ETei5mjm17YdXTaDO'
+WHERE email='kun3h0@goldenhomes.local';
