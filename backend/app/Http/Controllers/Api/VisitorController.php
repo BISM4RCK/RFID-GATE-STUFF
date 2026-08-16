@@ -13,17 +13,22 @@ class VisitorController extends Controller
     public function create(Request $request)
     {
         $data = $request->validate([
-            'house_number' => ['required', 'string', 'max:50'],
+            'phase' => ['required', 'string', 'max:50'],
+            'block_number' => ['required', 'string', 'max:50'],
+            'lot_number' => ['required', 'string', 'max:50'],
+            'household_letter' => ['required', 'string', 'size:1', 'regex:/^[A-Za-z]$/'],
+            'house_number' => ['nullable', 'string', 'max:50'],
             'visitor_name' => ['required', 'string', 'max:150'],
             'contact_number' => ['nullable', 'string', 'max:30'],
             'plate_number' => ['nullable', 'string', 'max:30'],
-            'vehicle_type' => ['nullable', 'in:car,motorcycle,truck,other'],
+            'vehicle_type' => ['nullable', 'in:car,motorcycle,truck,tricycle,ebike,other'],
             'vehicles' => ['nullable', 'array', 'max:10'],
             'vehicles.*.plate_number' => ['required', 'string', 'max:30'],
-            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,other'],
+            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,tricycle,ebike,other'],
             'government_id' => ['nullable', 'file', 'max:10240', 'mimes:jpg,jpeg,png,pdf'],
             'purpose_of_visit' => ['required', 'string', 'max:255'],
             'people_count' => ['required', 'integer', 'min:1', 'max:20'],
+            'stay_days' => ['required', 'integer', 'min:1', 'max:30'],
             'requested_visit_date' => ['nullable', 'date'],
 
         ]);
@@ -41,14 +46,17 @@ class VisitorController extends Controller
         }
 
         $resident = DB::table('residents')
-            ->where('house_number', $data['house_number'])
+            ->where('phase', $data['phase'])
+            ->where('block_number', $data['block_number'])
+            ->where('lot_number', $data['lot_number'])
+            ->where('household_letter', strtoupper($data['household_letter']))
             ->where('status', 'active')
             ->first();
 
         if (!$resident) {
             return response()->json([
                 'ok' => false,
-                'message' => 'That resident house number could not be found.',
+                'message' => 'That resident Phase / Block / Lot / Letter could not be found.',
             ], 422);
         }
 
@@ -80,11 +88,23 @@ class VisitorController extends Controller
                 'vehicle_type' => $vehicles[0]['vehicle_type'],
                 'purpose_of_visit' => $data['purpose_of_visit'],
                 'people_count' => $data['people_count'],
+                'stay_days' => $data['stay_days'],
                 'status' => 'pending',
                 'requested_visit_date' => $data['requested_visit_date'] ?? null,
                 'qr_reference' => 'GH-' . $credential,
                 'created_at' => now(),
                 'updated_at' => now(),
+            ]);
+
+            DB::table('visitor_notifications')->insert([
+                'resident_id'=>$resident->id,
+                'visitor_request_id'=>$id,
+                'type'=>'visitor_request',
+                'title'=>'New visitor request',
+                'message'=>$data['visitor_name'].' requested access to your residence.',
+                'is_read'=>0,
+                'created_at'=>now(),
+                'updated_at'=>now(),
             ]);
 
             $token = Str::random(48);
@@ -96,6 +116,7 @@ class VisitorController extends Controller
                 'barcode_token_hash' => hash('sha256', $token),
                 'qr_token' => $token,
                 'barcode_token' => $token,
+                'expires_at' => now()->addDays((int) $data['stay_days']),
                 'created_at' => now(),
             ]);
 
@@ -138,6 +159,7 @@ class VisitorController extends Controller
             'visitor_id' => $credential,
             'request_id' => $requestId,
             'status' => 'pending',
+            'expires_at' => DB::table('visitor_credentials')->where('visitor_id',$credential)->value('expires_at'),
         ], 201);
     }
 
@@ -150,9 +172,10 @@ class VisitorController extends Controller
             'contact_number' => ['nullable', 'string', 'max:30'],
             'purpose_of_visit' => ['required', 'string', 'max:255'],
             'people_count' => ['required', 'integer', 'min:1', 'max:20'],
+            'stay_days' => ['required', 'integer', 'min:1', 'max:30'],
             'vehicles' => ['required', 'array', 'min:1', 'max:10'],
             'vehicles.*.plate_number' => ['required', 'string', 'max:30'],
-            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,other'],
+            'vehicles.*.vehicle_type' => ['required', 'in:car,motorcycle,truck,tricycle,ebike,other'],
             'government_id' => ['nullable', 'file', 'max:10240', 'mimes:jpg,jpeg,png,pdf'],
         ]);
 
@@ -176,6 +199,7 @@ class VisitorController extends Controller
                 'vehicle_type' => $data['vehicles'][0]['vehicle_type'],
                 'purpose_of_visit' => $data['purpose_of_visit'],
                 'people_count' => $data['people_count'],
+                'stay_days' => $data['stay_days'],
                 'status' => 'approved',
                 'approved_by' => $user->id,
                 'approved_at' => now(),
@@ -192,6 +216,7 @@ class VisitorController extends Controller
                 'barcode_token_hash' => hash('sha256', $token),
                 'qr_token' => $token,
                 'barcode_token' => $token,
+                'expires_at' => now()->addDays((int) $data['stay_days']),
                 'created_at' => now(),
             ]);
 
@@ -229,6 +254,7 @@ class VisitorController extends Controller
             'visitor_id' => $credential,
             'request_id' => $requestId,
             'status' => 'approved',
+            'expires_at' => DB::table('visitor_credentials')->where('visitor_id',$credential)->value('expires_at'),
             'vehicles' => $data['vehicles'],
         ], 201);
     }
@@ -261,10 +287,16 @@ class VisitorController extends Controller
             ->where('id', $row->visitor_request_id)
             ->first();
 
+        $status = $visitor->status ?? 'unknown';
+        if ($row->expires_at && now()->greaterThan($row->expires_at) && in_array($status, ['pending','approved'], true)) {
+            $status = 'expired';
+            DB::table('visitor_requests')->where('id',$row->visitor_request_id)->update(['status'=>'expired','updated_at'=>now()]);
+        }
         return [
             'ok' => true,
             'visitor_id' => strtoupper($credential),
-            'status' => $visitor->status ?? 'unknown',
+            'status' => $status,
+            'expires_at' => $row->expires_at,
         ];
     }
 
@@ -282,8 +314,22 @@ class VisitorController extends Controller
         [, $residentId] = $this->residentUser($request);
         return response()->json([
             'ok' => true,
-            'requests' => DB::table('visitor_requests')->where('resident_id', $residentId)->orderByDesc('id')->limit(100)->get(),
+            'requests' => DB::table('visitor_requests as vr')->leftJoin('visitor_credentials as vc','vc.visitor_request_id','=','vr.id')->select('vr.*','vc.visitor_id')->where('vr.resident_id', $residentId)->orderByDesc('vr.id')->limit(100)->get(),
+            'unread_count' => DB::table('visitor_notifications')->where('resident_id',$residentId)->where('is_read',0)->count(),
         ]);
+    }
+
+    public function notifications(Request $request)
+    {
+        [, $residentId] = $this->residentUser($request);
+        return response()->json(['ok'=>true,'notifications'=>DB::table('visitor_notifications')->where('resident_id',$residentId)->orderByDesc('id')->limit(50)->get()]);
+    }
+
+    public function markNotificationRead(Request $request, int $id)
+    {
+        [, $residentId] = $this->residentUser($request);
+        DB::table('visitor_notifications')->where('id',$id)->where('resident_id',$residentId)->update(['is_read'=>1,'updated_at'=>now()]);
+        return ['ok'=>true];
     }
 
     public function approve(Request $request, int $id)

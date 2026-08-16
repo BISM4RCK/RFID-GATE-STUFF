@@ -1,6 +1,8 @@
 <?php
 use Illuminate\Support\Facades\Route;
 use Illuminate\Session\Middleware\StartSession;
+use App\Http\Middleware\RestoreAuthSession;
+use App\Http\Middleware\PersistentAuth;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\GateController;
 use App\Http\Controllers\Api\AccountController;
@@ -8,10 +10,12 @@ use App\Http\Controllers\Api\VisitorController;
 use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\RfidController;
 use App\Http\Controllers\Api\StaffController;
-Route::get('/health', fn()=>['ok'=>true,'service'=>'smart-gate','version'=>'32']);
-Route::middleware([StartSession::class])->group(function(){
+use App\Http\Controllers\Api\SystemHealthController;
+Route::get('/health', fn()=>['ok'=>true,'service'=>'smart-gate','version'=>'60']);
+Route::middleware([StartSession::class, RestoreAuthSession::class, PersistentAuth::class])->group(function(){
     Route::post('/auth/login',[AuthController::class,'login']);
     Route::post('/auth/logout',[AuthController::class,'logout']);
+    Route::post('/auth/change-password',[AuthController::class,'changePassword']);
     Route::get('/auth/me',[AuthController::class,'me']);
     Route::get('/dashboard',[AccountController::class,'dashboard']);
     Route::get('/staff/overview',[StaffController::class,'overview']);
@@ -24,13 +28,21 @@ Route::middleware([StartSession::class])->group(function(){
     Route::post('/staff/visitor-scan',[StaffController::class,'scanVisitor']);
     Route::get('/admin/users',[StaffController::class,'users']);
     Route::get('/admin/accounts',[StaffController::class,'accountDirectory']);
+    Route::post('/admin/accounts',[StaffController::class,'createAccount']);
     Route::get('/admin/account-vehicles',[StaffController::class,'accountVehicles']);
     Route::post('/admin/vehicles',[StaffController::class,'addAccountVehicle']);
     Route::post('/admin/accounts/{id}/{action}',[StaffController::class,'accountAction']);
     Route::get('/admin/vehicles',[StaffController::class,'vehicles']);
     Route::get('/admin/rfid-cards',[StaffController::class,'rfidCards']);
     Route::get('/admin/account-logs',[StaffController::class,'accountLogs']);
+    Route::get('/admin/system-health',[SystemHealthController::class,'index']);
+    Route::delete('/admin/account-logs',[StaffController::class,'deleteAccountLogs']);
+    Route::delete('/admin/gate-logs',[StaffController::class,'deleteGateLogs']);
+    Route::get('/staff/alerts',[StaffController::class,'alerts']);
+    Route::post('/admin/vehicles/manage',[StaffController::class,'manageVehicle']);
     Route::get('/resident/visitor-requests',[VisitorController::class,'requests']);
+    Route::get('/resident/notifications',[VisitorController::class,'notifications']);
+    Route::post('/resident/notifications/{id}/read',[VisitorController::class,'markNotificationRead']);
     Route::post('/resident/visitor-requests/{id}/approve',[VisitorController::class,'approve']);
     Route::post('/resident/visitor-requests/{id}/reject',[VisitorController::class,'reject']);
     Route::post('/resident/visitors',[VisitorController::class,'preRegister']);

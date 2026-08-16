@@ -37,6 +37,8 @@ RUN cp public/build/index.html public/index.html
 
 RUN php -r '$route=file_get_contents("routes/api.php"); $controller=file_get_contents("app/Http/Controllers/Api/AuthController.php"); if (strpos($route, "/auth/login") === false || strpos($controller, "function login") === false) { fwrite(STDERR, "ERROR: login endpoint missing\\n"); exit(1); }'
 
+RUN find app database routes -type f -name '*.php' -print0 | xargs -0 -n1 php -l >/tmp/php-lint.log && cat /tmp/php-lint.log
+
 RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R ug+rwX storage bootstrap/cache \

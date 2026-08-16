@@ -32,7 +32,7 @@ class VehicleController
     {
         $user = $this->user($request);
         $data = $request->validate([
-            'plate_number' => ['required', 'string', 'max:32'],
+            'plate_number' => ['nullable', 'string', 'max:32','required_unless:vehicle_type,ebike'],
             'vehicle_type' => ['required', 'in:car,motorcycle,truck,tricycle,ebike,other'],
             'color' => ['nullable', 'string', 'max:64'],
         ]);
@@ -43,9 +43,7 @@ class VehicleController
             $residentId = DB::table('residents')->where('user_id', $user->id)->value('id');
             abort_unless($residentId, 422, 'Resident profile not found.');
             if ($data['vehicle_type'] === 'ebike') {
-                $profile = DB::table('residents')->where('id', $residentId)->first();
-                $username = strtoupper(substr(strtok($user->email, '@'), 0, 3));
-                $data['plate_number'] = $username . ($profile->phase ?? '0') . '-' . ($profile->block_number ?? '0') . '-' . ($profile->lot_number ?? '0') . '-' . ($profile->household_letter ?? 'A');
+                abort_unless(!empty($data['plate_number']), 422, 'Custom e-bike plate is required.');
             }
 
             abort_if(Vehicle::where('resident_id', $residentId)->count() >= 20, 422, 'Vehicle limit reached.');

@@ -60,3 +60,181 @@
 .password-wrap{position:relative;display:flex}.password-wrap input{padding-right:72px;width:100%}.password-toggle{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:var(--surface-hover);color:var(--muted);border-radius:9px;padding:7px 9px;font-weight:700;cursor:pointer}
 .section-title{margin:24px 0 10px;font-size:17px}.inline-override{margin-bottom:16px}
 .danger-selected{background:rgba(217,48,37,.12)!important;color:var(--danger)!important}
+
+/* v54: iOS-style public controls, reliable sidebar collapse, and mobile glass UI */
+.ios-switch-button{border:0;background:transparent;color:var(--text);display:inline-flex;align-items:center;gap:8px;padding:5px;cursor:pointer}
+.ios-switch{width:48px;height:29px;border-radius:999px;padding:2px;background:rgba(120,120,128,.28);display:inline-flex;align-items:center;transition:.2s;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.ios-switch.on{background:var(--accent)}
+.ios-switch-thumb{width:25px;height:25px;border-radius:50%;background:#fff;color:#555;display:grid;place-items:center;font-size:13px;box-shadow:0 2px 5px rgba(0,0,0,.2);transform:translateX(0);transition:.2s}
+.ios-switch.on .ios-switch-thumb{transform:translateX(19px);color:#111}
+.ios-switch-label{font-size:12px;font-weight:750;color:var(--muted)}
+.segmented.two{grid-template-columns:1fr 1fr}
+.sidebar.is-collapsed{width:72px}
+.sidebar.is-collapsed .sidebar-title,.sidebar.is-collapsed .nav-label{display:none}
+.sidebar.is-collapsed .sidebar-head{justify-content:center}
+.sidebar.is-collapsed nav button{justify-content:center;padding:0}
+.sidebar.is-collapsed .nav-icon{width:auto}
+.dashboard-page.sidebar-collapsed{margin-left:72px}
+@media(max-width:1000px){
+  .dashboard-page.sidebar-collapsed{margin-left:0}
+  .dashboard-page{margin-left:0!important}
+}
+@media(max-width:760px){
+  .topbar{height:62px;padding:0 12px}
+  .brand-name{display:none}
+  .topbar-actions{gap:4px}
+  .hero{width:calc(100% - 24px);min-height:calc(100vh - 110px);padding:38px 0}
+  .hero h1{font-size:48px}
+  .hero-text{font-size:15px}
+  .button-grid{grid-template-columns:1fr;gap:10px}
+  .action-button{min-height:54px;border-radius:16px}
+  .form-card{width:calc(100% - 20px);margin:20px auto;padding:20px;border-radius:24px}
+  .form-card h1{font-size:36px}
+  .form-grid{grid-template-columns:1fr!important}
+  .full-width{grid-column:auto!important}
+  .modal-backdrop{padding:10px}
+  .modal{border-radius:26px;padding:18px;max-height:92vh}
+  .control-center-trigger{min-width:44px;width:44px;height:44px;padding:0;justify-content:center;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+  .control-center-trigger span:nth-child(2){display:none}
+  .control-center-popover{min-width:230px;border-radius:24px;padding:10px;background:rgba(248,249,252,.56);backdrop-filter:blur(56px) saturate(190%);-webkit-backdrop-filter:blur(56px) saturate(190%);box-shadow:0 26px 80px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.55)}
+  .control-center-popover button{min-height:50px;border-radius:16px}
+  .ios-switch-button{padding:5px}
+  .ios-switch-label{display:none}
+  .sidebar{display:none}
+  .dashboard-content{padding:20px 12px 100px}
+  .dashboard-head h1{font-size:31px}
+  .reader-row{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr 1fr}
+  .feature-grid{grid-template-columns:1fr!important}
+  .gate-grid{grid-template-columns:1fr!important}
+  .mobile-sticky-nav{display:grid!important;grid-template-columns:repeat(4,1fr);position:fixed;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));top:auto;z-index:80;margin:0;padding:7px;border:1px solid var(--border);border-radius:20px;background:color-mix(in srgb,var(--surface-solid) 62%,transparent);backdrop-filter:blur(34px) saturate(185%);-webkit-backdrop-filter:blur(34px) saturate(185%);box-shadow:0 18px 50px rgba(0,0,0,.22),inset 0 1px rgba(255,255,255,.5)}
+  .mobile-sticky-nav button{border:0;background:transparent;color:var(--muted);border-radius:15px;min-height:48px;display:grid;place-items:center}
+  .mobile-sticky-nav button.active{background:rgba(0,113,227,.12);color:var(--accent)}
+  .table-wrap{overflow-x:auto}
+  .panel{border-radius:22px}
+}
+
+.control-theme-row{min-height:50px;padding:0 10px 5px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--text);font-weight:750}
+.control-theme-row>.ios-switch-button{padding:0}
+.control-theme-row .ios-switch{transform:scale(.88);transform-origin:right center}
+
+.pagination{display:flex;align-items:center;justify-content:center;gap:10px;padding:14px 0 2px;color:var(--muted);font-size:12px;font-weight:700}.pagination button:disabled{opacity:.45;cursor:not-allowed;transform:none}
+@media(max-width:760px){.dashboard-content{padding-bottom:112px}.topbar{padding:0 10px}.control-center-trigger{overflow:hidden}.mobile-sticky-nav{bottom:max(10px,env(safe-area-inset-bottom));}}
+
+/* v58 visual cleanup: compact settings control, stronger glass, larger G, and iOS-style account management */
+.brand-mark{
+  width:40px;
+  height:40px;
+  border-radius:11px;
+  font-size:19px;
+  line-height:1;
+}
+.control-center-trigger{
+  width:42px;
+  height:42px;
+  padding:0;
+  display:grid;
+  place-items:center;
+  border:1px solid var(--border-strong);
+  border-radius:12px;
+  background:var(--surface-solid);
+  color:var(--text);
+  font-size:20px;
+  line-height:1;
+  box-shadow:0 2px 8px rgba(0,0,0,.06);
+}
+.control-center-trigger:hover{background:var(--surface-hover);transform:translateY(-1px)}
+.control-center-popover{
+  background:var(--surface-solid)!important;
+  border:1px solid var(--border-strong)!important;
+  backdrop-filter:blur(34px) saturate(180%)!important;
+  -webkit-backdrop-filter:blur(34px) saturate(180%)!important;
+  box-shadow:0 24px 70px rgba(0,0,0,.24)!important;
+}
+.account-manage-modal .modal{
+  width:min(500px,100%);
+  padding:0;
+  overflow:hidden;
+  border-radius:24px;
+  background:var(--surface-solid);
+  border:1px solid var(--border-strong);
+  box-shadow:0 30px 90px rgba(0,0,0,.28);
+}
+.account-manage-modal .modal-head{
+  margin:0;
+  padding:20px 20px 16px;
+  border-bottom:1px solid var(--border);
+  background:var(--surface-hover);
+}
+.account-manage-modal .modal-head h2{font-size:19px}
+.account-manage-modal .segmented{
+  margin:16px 20px;
+  padding:5px;
+  gap:4px;
+  grid-template-columns:repeat(3,1fr);
+  border:1px solid var(--border);
+  border-radius:16px;
+  background:var(--surface-hover);
+}
+.account-manage-modal .segmented button{
+  min-height:42px;
+  padding:9px 8px;
+  border-radius:12px;
+  font-weight:700;
+}
+.account-manage-modal .segmented button.selected{
+  background:var(--surface-solid);
+  color:var(--text);
+  box-shadow:0 3px 12px rgba(0,0,0,.10);
+}
+.account-manage-modal>div>.alert,
+.account-manage-modal .modal>label{
+  margin-left:20px;
+  margin-right:20px;
+}
+.account-manage-modal .modal>label{
+  display:grid;
+  gap:8px;
+  font-size:13px;
+  font-weight:700;
+}
+.account-manage-modal .modal>label input{
+  width:100%;
+  border:1px solid var(--border-strong);
+  background:var(--surface);
+  color:var(--text);
+  border-radius:13px;
+  padding:13px 14px;
+  outline:none;
+}
+.account-manage-modal .button-row{
+  margin-top:20px;
+  padding:16px 20px;
+  border-top:1px solid var(--border);
+  background:var(--surface-hover);
+}
+.account-manage-modal .button-row>*{min-height:42px;border-radius:12px;font-weight:700}
+@media(max-width:760px){
+  .brand-mark{width:42px;height:42px;border-radius:12px;font-size:21px}
+  .control-center-trigger{width:42px;height:42px;border-radius:12px;font-size:19px}
+  .account-dropdown,.control-center-popover{background:var(--surface-solid)!important;backdrop-filter:blur(36px) saturate(180%)!important;-webkit-backdrop-filter:blur(36px) saturate(180%)!important}
+  .account-manage-modal .modal{border-radius:24px;max-height:90vh}
+  .account-manage-modal .modal-head{padding:18px 18px 14px}
+  .account-manage-modal .segmented{margin:14px 16px;grid-template-columns:1fr;gap:4px}
+  .account-manage-modal .segmented button{min-height:44px}
+  .account-manage-modal>div>.alert,.account-manage-modal .modal>label{margin-left:16px;margin-right:16px}
+  .account-manage-modal .button-row{padding:14px 16px}
+}
+
+/* v59 account settings, visitor notifications, and protected vehicle management */
+.settings-card,.manage-vehicle-card{border:1px solid var(--border);background:var(--surface-hover);border-radius:16px;padding:20px}.settings-card h3,.manage-vehicle-card h3{margin:0 0 6px}.visitor-notification{display:flex;align-items:center;gap:12px;margin-bottom:12px}.visitor-notification span{flex:1}.resident-location{font-weight:650}.alert.success{background:rgba(22,128,59,.10);border-color:rgba(22,128,59,.22);color:var(--success)}
+@media(max-width:760px){.settings-card,.manage-vehicle-card{padding:16px;border-radius:18px}.visitor-notification{align-items:flex-start;flex-wrap:wrap}.visitor-notification span{flex-basis:100%}}
+
+/* v60: health, notifications, guest validity and lock controls */
+.health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+.health-card{display:grid;gap:7px;padding:16px;border:1px solid var(--border);border-radius:18px;background:var(--surface-solid);box-shadow:0 8px 28px rgba(0,0,0,.06)}
+.health-card>span{text-transform:capitalize;font-weight:750}.health-card small{color:var(--muted)}
+.notification-list{display:grid;gap:10px}.notification-card{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:15px 16px;border:1px solid var(--border);border-radius:18px;background:var(--surface-solid);box-shadow:0 8px 26px rgba(0,0,0,.06)}.notification-card p{margin:5px 0;color:var(--muted)}.notification-card small{color:var(--muted)}
+.blacklist-alert{display:flex;justify-content:space-between;align-items:center;gap:15px;border-color:rgba(217,48,37,.32);background:rgba(217,48,37,.10);color:var(--text)}.blacklist-alert>div{display:grid;gap:3px}.blacklist-alert span,.blacklist-alert small{color:var(--muted)}
+.manage-account-surface{display:grid;gap:14px}.account-summary{display:grid;gap:5px;padding:15px;border:1px solid var(--border);border-radius:18px;background:var(--surface-hover)}.manage-actions{margin:0;grid-template-columns:repeat(4,1fr)}
+@media(max-width:760px){.health-grid{grid-template-columns:1fr}.manage-actions{grid-template-columns:1fr}.mobile-sticky-nav{display:flex!important;overflow-x:auto;justify-content:flex-start}.mobile-sticky-nav button{min-width:76px;flex:0 0 76px}.blacklist-alert{align-items:flex-start}.notification-card{border-radius:17px}}

@@ -238,6 +238,7 @@ class StaffController extends Controller
                 'vr.plate_number',
                 'vr.vehicle_type',
                 'vr.status as visitor_status',
+                'vc.expires_at',
                 'resident_user.id as resident_user_id',
                 'resident_user.full_name as resident_name',
                 'resident_user.email as resident_email'
@@ -283,18 +284,11 @@ class StaffController extends Controller
         $approved = !$blacklisted && ($status === 'approved' || ($walkIn && $status === 'active'));
         $reason = $blacklisted ? 'Visitor or vehicle is blacklisted.' : ($approved ? 'Visitor approved.' : 'Visitor request is not approved.');
 
-        $vehicleCount = 1;
         $usageRequestId = $visitor?->visitor_request_id;
-        if ($usageRequestId) {
-            $vehicleCount = max(1, (int) DB::table('visitor_request_vehicles')->where('visitor_request_id', $usageRequestId)->count());
-            $usage = DB::table('visitor_gate_usage')->where('visitor_request_id', $usageRequestId)->where('gate', $data['gate'])->first();
-            $used = (int) ($usage->scan_count ?? 0);
-            if ($used >= $vehicleCount && $approved) {
-                $approved = false;
-                $reason = 'Visitor barcode limit reached for this gate.';
-            }
-        } elseif ($walkIn) {
-            $vehicleCount = max(1, (int) DB::table('walk_in_visitor_vehicles')->where('walk_in_id', $walkIn->id)->count());
+        $expiresAt = $visitor?->expires_at;
+        if ($expiresAt && now()->greaterThan($expiresAt) && $approved) {
+            $approved = false;
+            $reason = 'Guest credential has expired.';
         }
 
         $logId = DB::table('gate_logs')->insertGetId([
@@ -316,28 +310,6 @@ class StaffController extends Controller
 
         $commandId = null;
         if ($approved) {
-            if ($usageRequestId) {
-                $existingUsage = DB::table('visitor_gate_usage')
-                    ->where('visitor_request_id', $usageRequestId)
-                    ->where('gate', $data['gate'])
-                    ->first();
-                if ($existingUsage) {
-                    DB::table('visitor_gate_usage')->where('id', $existingUsage->id)->update([
-                        'scan_count' => ((int) $existingUsage->scan_count) + 1,
-                        'last_scanned_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                } else {
-                    DB::table('visitor_gate_usage')->insert([
-                        'visitor_request_id' => $usageRequestId,
-                        'gate' => $data['gate'],
-                        'scan_count' => 1,
-                        'last_scanned_at' => now(),
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                }
-            }
             $commandId = DB::table('gate_commands')->insertGetId([
                 'issued_by' => $guard->id,
                 'issued_by_role' => $guard->role,
@@ -366,14 +338,31 @@ class StaffController extends Controller
             'reason' => $reason,
             'log_id' => $logId,
             'command_id' => $commandId,
-            'vehicle_limit' => $vehicleCount,
+            'expires_at' => $expiresAt,
         ]);
+    }
+
+    public function alerts(Request $request)
+    {
+        $this->user($request);
+        $alerts = DB::table('gate_logs as gl')
+            ->leftJoin('users as u', 'u.id', '=', 'gl.actor_user_id')
+            ->select('gl.id','gl.reader','gl.plate_number','gl.event_type','gl.gate_status','gl.log_notes','gl.created_at','u.full_name as account_name')
+            ->where('gl.gate_status','denied')
+            ->where(function($q){ $q->where('gl.log_notes','like','%blacklist%')->orWhere('gl.log_notes','like','%blacklisted%'); })
+            ->orderByDesc('gl.id')->limit(20)->get();
+        return ['ok'=>true,'alerts'=>$alerts];
     }
 
     public function users(Request $request)
     {
         $this->admin($request);
-        return ['ok' => true, 'users' => DB::table('users')->select('id','full_name','email','role','status','is_super_admin','last_login_at')->orderBy('id')->get()];
+        $users = DB::table('users')->select('id','full_name','username','email','role','status','locked_until','is_super_admin','last_login_at')->orderBy('id')->get()->map(function($x){
+            $lastActivity = DB::table('sessions')->where('user_id',$x->id)->max('last_activity');
+            $x->online = $lastActivity ? (time() - (int)$lastActivity) <= 300 : false;
+            return $x;
+        });
+        return ['ok' => true, 'users' => $users];
     }
 
     public function vehicles(Request $request)
@@ -411,20 +400,150 @@ class StaffController extends Controller
         return response()->json(['ok' => true, 'logs' => $query->get()]);
     }
 
+    public function deleteAccountLogs(Request $request)
+    {
+        $admin=$this->admin($request);
+        abort_unless((int)$admin->is_super_admin===1,403,'Only the super admin can delete account logs.');
+        $count=DB::table('account_activity_logs')->count();
+        DB::table('account_activity_logs')->truncate();
+        return ['ok'=>true,'deleted'=>$count];
+    }
+
+    public function deleteGateLogs(Request $request)
+    {
+        $admin=$this->admin($request);
+        abort_unless((int)$admin->is_super_admin===1,403,'Only the super admin can delete gate logs.');
+        $count=DB::table('gate_logs')->count();
+        DB::table('gate_logs')->truncate();
+        return ['ok'=>true,'deleted'=>$count];
+    }
+
+    public function manageVehicle(Request $request)
+    {
+        $admin=$this->admin($request);
+        $data=$request->validate([
+            'kind'=>['required','in:resident,staff'],
+            'id'=>['required','integer'],
+            'action'=>['required','in:update_color,delete'],
+            'color'=>['nullable','string','max:64'],
+        ]);
+        $table=$data['kind']==='resident'?'vehicles':'user_vehicles';
+        $vehicle=DB::table($table)->where('id',$data['id'])->first();
+        abort_unless($vehicle,404,'Vehicle not found.');
+        if($data['action']==='delete'){
+            DB::table($table)->where('id',$vehicle->id)->delete();
+            ActivityLogger::log($request,$admin,'admin_remove_vehicle','Removed vehicle '.$vehicle->plate_number);
+        } else {
+            abort_unless(filled($data['color']),422,'Color is required.');
+            DB::table($table)->where('id',$vehicle->id)->update(['color'=>$data['color'],'updated_at'=>now()]);
+            ActivityLogger::log($request,$admin,'admin_change_vehicle_color','Changed vehicle color for '.$vehicle->plate_number);
+        }
+        return ['ok'=>true];
+    }
+
+    public function createAccount(Request $request)
+    {
+        $admin = $this->admin($request);
+
+        $data = $request->validate([
+            'full_name' => ['required','string','max:150'],
+            'email' => ['required','email','max:150','unique:users,email'],
+            'username' => ['required','string','max:80','regex:/^[A-Za-z0-9._-]+$/','unique:users,username'],
+            'role' => ['required','in:resident,guard,admin'],
+            'phase' => ['required_if:role,resident','nullable','regex:/^\d+$/','max:3'],
+            'block_number' => ['required_if:role,resident','nullable','string','max:50'],
+            'lot_number' => ['required_if:role,resident','nullable','string','max:50'],
+            'household_letter' => ['required_if:role,resident','nullable','string','size:1','regex:/^[A-Za-z]$/'],
+            'gate_assignment' => ['required_if:role,guard','nullable','in:1,2,3'],
+        ]);
+
+        $username = strtoupper(trim($data['username']));
+        $password = strtoupper(substr(bin2hex(random_bytes(4)),0,8)) . '!';
+        $fullName = trim($data['full_name']);
+
+        $userId = DB::transaction(function () use ($data, $username, $password, $fullName) {
+            $id = DB::table('users')->insertGetId([
+                'full_name' => $fullName,
+                'username' => $username,
+                'email' => strtolower($data['email']),
+                'password' => password_hash($password, PASSWORD_BCRYPT),
+                'role' => $data['role'],
+                'status' => 'active',
+                'is_super_admin' => 0,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            if ($data['role'] === 'resident') {
+                $letter = strtoupper($data['household_letter']);
+                $house = $data['block_number'].'-'.$data['lot_number'].'-'.$letter;
+                DB::table('residents')->insert([
+                    'user_id'=>$id,
+                    'house_number'=>$house,
+                    'block_number'=>$data['block_number'],
+                    'lot_number'=>$data['lot_number'],
+                    'household_letter'=>$letter,
+                    'status'=>'active',
+                    'created_at'=>now(),
+                    'updated_at'=>now(),
+                ]);
+                // phase is added by the account-management migration.
+                DB::table('residents')->where('user_id',$id)->update(['phase'=>$data['phase']]);
+            } elseif ($data['role'] === 'guard') {
+                DB::table('guards')->insert([
+                    'user_id'=>$id,
+                    'guard_code'=>'GRD-'.str_pad((string)$id,3,'0',STR_PAD_LEFT),
+                    'gate_assignment'=>$data['gate_assignment'],
+                    'status'=>'active',
+                    'created_at'=>now(),
+                    'updated_at'=>now(),
+                ]);
+            } else {
+                DB::table('admins')->insert([
+                    'user_id'=>$id,
+                    'admin_code'=>'ADM-'.str_pad((string)$id,3,'0',STR_PAD_LEFT),
+                    'status'=>'active',
+                    'created_at'=>now(),
+                    'updated_at'=>now(),
+                ]);
+            }
+
+            return $id;
+        });
+
+        ActivityLogger::log($request, $admin, 'create_account', "Created {$data['role']} account {$data['email']}");
+        return response()->json([
+            'ok'=>true,
+            'id'=>$userId,
+            'username'=>$username,
+            'email'=>strtolower($data['email']),
+            'temporary_password'=>$password,
+            'role'=>$data['role'],
+        ], 201);
+    }
+
     public function accountDirectory(Request $request)
     {
         $this->admin($request);
         $residents = DB::table('residents as r')
             ->join('users as u','u.id','=','r.user_id')
-            ->select('u.id','u.full_name','u.email','u.role','u.status','u.last_login_at','u.is_super_admin',
+            ->select('u.id','u.full_name','u.username','u.email','u.role','u.status','u.locked_until','u.last_login_at','u.is_super_admin',
                      'r.phase','r.block_number','r.lot_number','r.household_letter','r.house_number')
             ->orderBy('r.phase')->orderBy('r.block_number')->orderBy('r.lot_number')->orderBy('r.household_letter')->get()
-            ->map(function($x){ $x->online = $x->last_login_at ? now()->diffInMinutes($x->last_login_at) <= 15 : false; return $x; });
+            ->map(function($x){
+                $lastActivity = DB::table('sessions')->where('user_id',$x->id)->max('last_activity');
+                $x->online = $lastActivity ? (time() - (int)$lastActivity) <= 300 : false;
+                return $x;
+            });
         $staff = DB::table('users as u')
             ->leftJoin('guards as g','g.user_id','=','u.id')
-            ->select('u.id','u.full_name','u.email','u.role','u.status','u.last_login_at','u.is_super_admin','g.gate_assignment')
+            ->select('u.id','u.full_name','u.username','u.email','u.role','u.status','u.locked_until','u.last_login_at','u.is_super_admin','g.gate_assignment')
             ->whereIn('u.role',['guard','admin'])->orderBy('u.role')->orderBy('u.full_name')->get()
-            ->map(function($x){ $x->online = $x->last_login_at ? now()->diffInMinutes($x->last_login_at) <= 15 : false; return $x; });
+            ->map(function($x){
+                $lastActivity = DB::table('sessions')->where('user_id',$x->id)->max('last_activity');
+                $x->online = $lastActivity ? (time() - (int)$lastActivity) <= 300 : false;
+                return $x;
+            });
         return response()->json(['ok'=>true,'residents'=>$residents,'staff'=>$staff]);
     }
 
@@ -433,7 +552,7 @@ class StaffController extends Controller
         $admin = $this->admin($request);
         $data = $request->validate([
             'user_id'=>['required','integer','exists:users,id'],
-            'plate_number'=>['nullable','string','max:32'],
+            'plate_number'=>['nullable','string','max:32','required'],
             'vehicle_type'=>['required','in:car,motorcycle,truck,tricycle,ebike,other'],
             'color'=>['nullable','string','max:64'],
         ]);
@@ -448,7 +567,11 @@ class StaffController extends Controller
             abort_unless($profile,422,'Resident profile not found.');
             $plate=$data['plate_number'];
             if ($data['vehicle_type']==='ebike') {
-                $plate=strtoupper(substr(strtok($target->email,'@'),0,3)).($profile->phase??'0').'-'.($profile->block_number??'0').'-'.($profile->lot_number??'0').'-'.($profile->household_letter??'A');
+                $plate=strtoupper(substr($target->username ?: strtok($target->email,'@'),0,3))
+                    .preg_replace('/[^0-9]/','',(string)($profile->phase ?? '0'))
+                    .'-'.($profile->block_number ?? '0')
+                    .'-'.($profile->lot_number ?? '0')
+                    .'-'.strtoupper($profile->household_letter ?? 'A');
             }
             abort_unless($data['vehicle_type']==='ebike' || !empty($plate),422,'Plate number is required.');
             $id=DB::table('vehicles')->insertGetId(['resident_id'=>$profile->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'status'=>'active','created_at'=>now(),'updated_at'=>now()]);
@@ -468,8 +591,21 @@ class StaffController extends Controller
         $target=DB::table('users')->where('id',$id)->first();
         abort_unless($target,404,'Account not found.');
         abort_if((int)$target->is_super_admin===1 && $target->id!==$admin->id,403,'Super admin account cannot be managed.');
+        if ($action==='lock') {
+            abort_if($target->id === $admin->id, 422, 'You cannot lock your own account.');
+            DB::table('users')->where('id',$id)->update(['locked_until'=>now()->addHour(),'failed_login_attempts'=>0,'updated_at'=>now()]);
+            DB::table('auth_tokens')->where('user_id',$id)->delete();
+            ActivityLogger::log($request,$admin,'lock_account',"Locked account {$target->email} for 1 hour");
+            return ['ok'=>true,'locked_until'=>now()->addHour()->toIso8601String()];
+        }
+        if ($action==='unlock') {
+            DB::table('users')->where('id',$id)->update(['locked_until'=>null,'failed_login_attempts'=>0,'updated_at'=>now()]);
+            ActivityLogger::log($request,$admin,'unlock_account',"Unlocked account {$target->email}");
+            return ['ok'=>true];
+        }
         if ($action==='delete') {
             abort_if($target->id===$admin->id,422,'You cannot delete your own account.');
+            abort_if((int)$target->is_super_admin===1,403,'The super admin account cannot be deleted.');
             DB::table('users')->where('id',$id)->delete();
             ActivityLogger::log($request,$admin,'delete_account',"Deleted account {$target->email}");
             return ['ok'=>true];

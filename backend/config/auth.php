@@ -25,4 +25,6 @@ return [
         ],
     ],
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
+    'persistent_cookie' => env('AUTH_PERSISTENT_COOKIE', 'smart_gate_auth'),
+    'persistent_cookie_minutes' => (int) env('AUTH_PERSISTENT_COOKIE_MINUTES', 43200),
 ];
