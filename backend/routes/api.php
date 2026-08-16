@@ -23,6 +23,10 @@ Route::middleware([StartSession::class])->group(function(){
     Route::post('/staff/walkins',[StaffController::class,'addWalkIn']);
     Route::post('/staff/visitor-scan',[StaffController::class,'scanVisitor']);
     Route::get('/admin/users',[StaffController::class,'users']);
+    Route::get('/admin/accounts',[StaffController::class,'accountDirectory']);
+    Route::get('/admin/account-vehicles',[StaffController::class,'accountVehicles']);
+    Route::post('/admin/vehicles',[StaffController::class,'addAccountVehicle']);
+    Route::post('/admin/accounts/{id}/{action}',[StaffController::class,'accountAction']);
     Route::get('/admin/vehicles',[StaffController::class,'vehicles']);
     Route::get('/admin/rfid-cards',[StaffController::class,'rfidCards']);
     Route::get('/admin/account-logs',[StaffController::class,'accountLogs']);

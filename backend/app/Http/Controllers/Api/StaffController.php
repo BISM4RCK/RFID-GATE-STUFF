@@ -411,4 +411,92 @@ class StaffController extends Controller
         return response()->json(['ok' => true, 'logs' => $query->get()]);
     }
 
+    public function accountDirectory(Request $request)
+    {
+        $this->admin($request);
+        $residents = DB::table('residents as r')
+            ->join('users as u','u.id','=','r.user_id')
+            ->select('u.id','u.full_name','u.email','u.role','u.status','u.last_login_at','u.is_super_admin',
+                     'r.phase','r.block_number','r.lot_number','r.household_letter','r.house_number')
+            ->orderBy('r.phase')->orderBy('r.block_number')->orderBy('r.lot_number')->orderBy('r.household_letter')->get()
+            ->map(function($x){ $x->online = $x->last_login_at ? now()->diffInMinutes($x->last_login_at) <= 15 : false; return $x; });
+        $staff = DB::table('users as u')
+            ->leftJoin('guards as g','g.user_id','=','u.id')
+            ->select('u.id','u.full_name','u.email','u.role','u.status','u.last_login_at','u.is_super_admin','g.gate_assignment')
+            ->whereIn('u.role',['guard','admin'])->orderBy('u.role')->orderBy('u.full_name')->get()
+            ->map(function($x){ $x->online = $x->last_login_at ? now()->diffInMinutes($x->last_login_at) <= 15 : false; return $x; });
+        return response()->json(['ok'=>true,'residents'=>$residents,'staff'=>$staff]);
+    }
+
+    public function addAccountVehicle(Request $request)
+    {
+        $admin = $this->admin($request);
+        $data = $request->validate([
+            'user_id'=>['required','integer','exists:users,id'],
+            'plate_number'=>['nullable','string','max:32'],
+            'vehicle_type'=>['required','in:car,motorcycle,truck,tricycle,ebike,other'],
+            'color'=>['nullable','string','max:64'],
+        ]);
+        $target = DB::table('users')->where('id',$data['user_id'])->first();
+        abort_unless($target,404);
+        $count = $target->role === 'resident'
+            ? DB::table('vehicles')->whereIn('resident_id',DB::table('residents')->where('user_id',$target->id)->pluck('id'))->count()
+            : DB::table('user_vehicles')->where('user_id',$target->id)->count();
+        abort_if($count >= 20,422,'Vehicle limit reached (20).');
+        if ($target->role === 'resident') {
+            $profile=DB::table('residents')->where('user_id',$target->id)->first();
+            abort_unless($profile,422,'Resident profile not found.');
+            $plate=$data['plate_number'];
+            if ($data['vehicle_type']==='ebike') {
+                $plate=strtoupper(substr(strtok($target->email,'@'),0,3)).($profile->phase??'0').'-'.($profile->block_number??'0').'-'.($profile->lot_number??'0').'-'.($profile->household_letter??'A');
+            }
+            abort_unless($data['vehicle_type']==='ebike' || !empty($plate),422,'Plate number is required.');
+            $id=DB::table('vehicles')->insertGetId(['resident_id'=>$profile->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'status'=>'active','created_at'=>now(),'updated_at'=>now()]);
+        } else {
+            abort_unless(in_array($target->role,['guard','admin']),422,'Select a valid account.');
+            $plate=$data['plate_number'];
+            abort_unless($data['vehicle_type']==='ebike' || !empty($plate),422,'Plate number is required.');
+            $id=DB::table('user_vehicles')->insertGetId(['user_id'=>$target->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'created_at'=>now()]);
+        }
+        ActivityLogger::log($request,$admin,'admin_add_vehicle',"Added {$data['vehicle_type']} to {$target->email}: ".($plate??''));
+        return response()->json(['ok'=>true,'id'=>$id,'plate_number'=>strtoupper($plate??'')],201);
+    }
+
+    public function accountAction(Request $request, int $id, string $action)
+    {
+        $admin=$this->admin($request);
+        $target=DB::table('users')->where('id',$id)->first();
+        abort_unless($target,404,'Account not found.');
+        abort_if((int)$target->is_super_admin===1 && $target->id!==$admin->id,403,'Super admin account cannot be managed.');
+        if ($action==='delete') {
+            abort_if($target->id===$admin->id,422,'You cannot delete your own account.');
+            DB::table('users')->where('id',$id)->delete();
+            ActivityLogger::log($request,$admin,'delete_account',"Deleted account {$target->email}");
+            return ['ok'=>true];
+        }
+        if ($action==='email') {
+            $data=$request->validate(['email'=>['required','email','max:150','unique:users,email,'.$id]]);
+            DB::table('users')->where('id',$id)->update(['email'=>$data['email'],'updated_at'=>now()]);
+            ActivityLogger::log($request,$admin,'change_email',"Changed email for {$target->email}");
+            return ['ok'=>true];
+        }
+        if ($action==='password') {
+            $data=$request->validate(['password'=>['required','string','min:8','max:100']]);
+            DB::table('users')->where('id',$id)->update(['password'=>password_hash($data['password'],PASSWORD_BCRYPT),'updated_at'=>now()]);
+            ActivityLogger::log($request,$admin,'change_password',"Changed password for {$target->email}");
+            return ['ok'=>true];
+        }
+        abort(404,'Unknown account action.');
+    }
+
+    public function accountVehicles(Request $request)
+    {
+        $this->admin($request);
+        $res=DB::table('vehicles as v')->join('residents as r','r.id','=','v.resident_id')->join('users as u','u.id','=','r.user_id')
+            ->select('v.*','u.id as user_id','u.full_name as account_name','u.email','u.role','r.phase','r.block_number','r.lot_number','r.household_letter')->get();
+        $staff=DB::table('user_vehicles as v')->join('users as u','u.id','=','v.user_id')
+            ->select('v.*','u.id as user_id','u.full_name as account_name','u.email','u.role')->get();
+        return ['ok'=>true,'resident_vehicles'=>$res,'staff_vehicles'=>$staff];
+    }
+
 }
