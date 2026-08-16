@@ -342,6 +342,61 @@ class StaffController extends Controller
         ]);
     }
 
+    public function incidents(Request $request)
+    {
+        $this->user($request);
+        $items = DB::table('gate_logs as gl')
+            ->leftJoin('users as u', 'u.id', '=', 'gl.actor_user_id')
+            ->select('gl.id','gl.reader','gl.plate_number','gl.event_type','gl.gate_status','gl.log_notes','gl.created_at','u.full_name as account_name')
+            ->where(function($q){
+                $q->where('gl.log_notes','like','%blacklist%')
+                  ->orWhere('gl.event_type','manual_override')
+                  ->orWhere('gl.gate_status','denied');
+            })
+            ->orderByDesc('gl.id')->limit(100)->get();
+        $readers = DB::table('gate_reader_status')->orderBy('reader')->get()->map(function($r){
+            $r->online = $r->last_seen_at ? now()->diffInSeconds($r->last_seen_at) <= 15 : false;
+            return $r;
+        });
+        return ['ok'=>true,'incidents'=>$items,'reader_incidents'=>$readers->filter(fn($r)=>!$r->online)->values()];
+    }
+
+    public function stats(Request $request)
+    {
+        $admin = $this->admin($request);
+        abort_unless((int)$admin->is_super_admin === 1, 403, 'Only the super admin can view gate statistics.');
+        $today = now()->startOfDay();
+        $week = now()->subDays(6)->startOfDay();
+        $approvedToday = DB::table('gate_logs')->where('created_at','>=',$today)->where('gate_status','approved')->count();
+        $deniedToday = DB::table('gate_logs')->where('created_at','>=',$today)->where('gate_status','denied')->count();
+        $guestToday = DB::table('visitor_requests')->where('created_at','>=',$today)->count();
+        $weekly = DB::table('gate_logs')->selectRaw('DATE(created_at) as day, SUM(gate_status = \'approved\') as approved, SUM(gate_status = \'denied\') as denied')->where('created_at','>=',$week)->groupByRaw('DATE(created_at)')->orderBy('day')->get();
+        $byGate = DB::table('gate_logs')->selectRaw('reader, COUNT(*) as total')->where('created_at','>=',$week)->whereIn('reader',['entry','exit'])->groupBy('reader')->get();
+        return ['ok'=>true,'today'=>['approved'=>$approvedToday,'denied'=>$deniedToday,'guests'=>$guestToday],'weekly'=>$weekly,'by_gate'=>$byGate];
+    }
+
+    public function exportGateLogs(Request $request)
+    {
+        $this->admin($request);
+        $rows = DB::table('gate_logs as gl')->leftJoin('users as u','u.id','=','gl.actor_user_id')->select('gl.*','u.full_name as account_name','u.email as account_email')->orderByDesc('gl.id')->limit(10000)->get();
+        return response()->streamDownload(function() use ($rows){
+            $out=fopen('php://output','w'); fputcsv($out,['Time (GMT+8)','Gate','Account','Plate','Event','Result','Notes']);
+            foreach($rows as $r) fputcsv($out,[optional($r->created_at)->format('Y-m-d H:i:s') ?? $r->created_at,$r->reader,$r->account_name ?: $r->account_email,$r->plate_number,$r->event_type,$r->gate_status,$r->log_notes]);
+            fclose($out);
+        }, 'smart-gate-gate-logs.csv', ['Content-Type'=>'text/csv']);
+    }
+
+    public function exportAccountLogs(Request $request)
+    {
+        $this->admin($request);
+        $rows=DB::table('account_activity_logs as a')->leftJoin('users as u','u.id','=','a.user_id')->select('a.*','u.full_name','u.email','u.role')->orderByDesc('a.id')->limit(10000)->get();
+        return response()->streamDownload(function() use($rows){
+            $out=fopen('php://output','w'); fputcsv($out,['Time (GMT+8)','Account','Email','Role','Action','Details','IP']);
+            foreach($rows as $r) fputcsv($out,[$r->created_at,$r->full_name ?: $r->account_identifier,$r->email,$r->role ?: $r->account_type,$r->action,$r->details,$r->ip_address]);
+            fclose($out);
+        }, 'smart-gate-account-logs.csv', ['Content-Type'=>'text/csv']);
+    }
+
     public function alerts(Request $request)
     {
         $this->user($request);
@@ -552,7 +607,7 @@ class StaffController extends Controller
         $admin = $this->admin($request);
         $data = $request->validate([
             'user_id'=>['required','integer','exists:users,id'],
-            'plate_number'=>['nullable','string','max:32','required'],
+            'plate_number'=>['nullable','string','max:32','required_unless:vehicle_type,ebike'],
             'vehicle_type'=>['required','in:car,motorcycle,truck,tricycle,ebike,other'],
             'color'=>['nullable','string','max:64'],
         ]);
@@ -565,7 +620,7 @@ class StaffController extends Controller
         if ($target->role === 'resident') {
             $profile=DB::table('residents')->where('user_id',$target->id)->first();
             abort_unless($profile,422,'Resident profile not found.');
-            $plate=$data['plate_number'];
+            $plate=$data['plate_number'] ?? null;
             if ($data['vehicle_type']==='ebike') {
                 $plate=strtoupper(substr($target->username ?: strtok($target->email,'@'),0,3))
                     .preg_replace('/[^0-9]/','',(string)($profile->phase ?? '0'))
@@ -577,8 +632,8 @@ class StaffController extends Controller
             $id=DB::table('vehicles')->insertGetId(['resident_id'=>$profile->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'status'=>'active','created_at'=>now(),'updated_at'=>now()]);
         } else {
             abort_unless(in_array($target->role,['guard','admin']),422,'Select a valid account.');
-            $plate=$data['plate_number'];
-            abort_unless($data['vehicle_type']==='ebike' || !empty($plate),422,'Plate number is required.');
+            $plate=$data['plate_number'] ?? null;
+            abort_unless(!empty($plate),422,'Plate number is required.');
             $id=DB::table('user_vehicles')->insertGetId(['user_id'=>$target->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'created_at'=>now()]);
         }
         ActivityLogger::log($request,$admin,'admin_add_vehicle',"Added {$data['vehicle_type']} to {$target->email}: ".($plate??''));

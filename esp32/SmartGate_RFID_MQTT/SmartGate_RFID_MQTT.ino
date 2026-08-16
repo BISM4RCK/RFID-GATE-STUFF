@@ -19,6 +19,7 @@ constexpr uint8_t ENTRY_SS=5, ENTRY_GREEN=25, ENTRY_RED=26;
 constexpr uint8_t EXIT_SS=16, EXIT_GREEN=32, EXIT_RED=33;
 constexpr uint8_t SYS_GREEN=13, SYS_RED=14, RELAY=27;
 constexpr uint32_t GATE_MS=2500, LED_MS=1500, HEARTBEAT_MS=5000, COMMAND_POLL_MS=1000;
+const char* FIRMWARE_VERSION = "61.0";
 constexpr uint16_t COOLDOWN=650;
 
 MFRC522 entryReader(ENTRY_SS, RST_PIN);
@@ -102,8 +103,13 @@ void pollCommands() {
             String id = body.substring(idStart, idEnd);
             int gatePos = body.indexOf("\"gate\":\"", pos);
             int cmdPos = body.indexOf("\"command\":\"open\"", pos);
+            int restartPos = body.indexOf("\"command\":\"restart_device\"", pos);
             int nextObject = body.indexOf("}", pos);
-            if (gatePos >= 0 && (nextObject < 0 || gatePos < nextObject) && cmdPos >= 0 && (nextObject < 0 || cmdPos < nextObject)) {
+            if (restartPos >= 0 && (nextObject < 0 || restartPos < nextObject)) {
+                completeCommand(id);
+                delay(50);
+                ESP.restart();
+            } else if (gatePos >= 0 && (nextObject < 0 || gatePos < nextObject) && cmdPos >= 0 && (nextObject < 0 || cmdPos < nextObject)) {
                 openGate();
                 completeCommand(id);
             }
@@ -120,7 +126,10 @@ void heartbeat() {
     if (!http.begin(tls, url)) return;
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     http.addHeader("X-SmartGate-Device", DEVICE_KEY);
-    http.POST(String("device_id=") + DEVICE_ID);
+    String ip = WiFi.localIP().toString();
+    String mqttStatus = mqtt.connected() ? "online" : "offline";
+    String body = String("device_id=") + DEVICE_ID + "&firmware_version=" + FIRMWARE_VERSION + "&ip_address=" + ip + "&mqtt_status=" + mqttStatus + "&wifi_rssi=" + String(WiFi.RSSI()) + "&free_heap=" + String(ESP.getFreeHeap()) + "&uptime_seconds=" + String(millis() / 1000UL) + "&wifi_status=" + (WiFi.status() == WL_CONNECTED ? "online" : "offline");
+    http.POST(body);
     http.end();
 }
 

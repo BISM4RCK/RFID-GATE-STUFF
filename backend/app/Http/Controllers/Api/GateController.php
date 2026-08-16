@@ -133,6 +133,13 @@ class GateController extends Controller
         $this->device($request);
 
         $deviceId = (string) $request->input('device_id', env('ESP32_DEVICE_ID', '180503'));
+        $firmware = (string) $request->input('firmware_version', 'unknown');
+        $ip = (string) $request->input('ip_address', '');
+        $mqttStatus = (string) $request->input('mqtt_status', 'unknown');
+        $wifiRssi = $request->input('wifi_rssi');
+        $freeHeap = $request->input('free_heap');
+        $uptimeSeconds = $request->input('uptime_seconds');
+        $wifiStatus = (string) $request->input('wifi_status', 'unknown');
 
         foreach (['entry', 'exit'] as $reader) {
             DB::table('gate_reader_status')->updateOrInsert(
@@ -141,6 +148,13 @@ class GateController extends Controller
                     'device_id' => $deviceId,
                     'last_seen_at' => now(),
                     'online' => 1,
+                    'firmware_version' => $firmware,
+                    'ip_address' => $ip ?: null,
+                    'mqtt_status' => $mqttStatus,
+                    'wifi_rssi' => is_numeric($wifiRssi) ? (int)$wifiRssi : null,
+                    'free_heap' => is_numeric($freeHeap) ? (int)$freeHeap : null,
+                    'uptime_seconds' => is_numeric($uptimeSeconds) ? (int)$uptimeSeconds : null,
+                    'wifi_status' => $wifiStatus,
                     'updated_at' => now(),
                 ]
             );

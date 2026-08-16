@@ -25,7 +25,7 @@ RUN composer install \
 FROM php:8.4-fpm-alpine AS app
 WORKDIR /var/www/html
 
-RUN apk add --no-cache icu-libs libzip libxml2 oniguruma \
+RUN apk add --no-cache icu-libs libzip libxml2 oniguruma mariadb-client \
     && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS icu-dev libzip-dev oniguruma-dev libxml2-dev \
     && docker-php-ext-install pdo_mysql mbstring intl opcache xml \
     && apk del .build-deps

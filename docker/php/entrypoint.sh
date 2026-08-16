@@ -75,6 +75,7 @@ php artisan config:clear --no-interaction
 php artisan route:clear --no-interaction
 php artisan view:clear --no-interaction
 php artisan migrate --force --no-interaction
+php artisan smart-gate:cleanup-guests --no-interaction || true
 php artisan config:cache --no-interaction
 php artisan route:cache --no-interaction
 php artisan view:cache --no-interaction

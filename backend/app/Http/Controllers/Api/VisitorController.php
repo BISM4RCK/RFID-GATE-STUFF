@@ -10,8 +10,19 @@ use App\Support\ActivityLogger;
 
 class VisitorController extends Controller
 {
+    private function cleanupExpiredGuests(): void
+    {
+        DB::table('visitor_requests as vr')
+            ->join('visitor_credentials as vc','vc.visitor_request_id','=','vr.id')
+            ->whereNotNull('vc.expires_at')
+            ->where('vc.expires_at','<=',now())
+            ->whereIn('vr.status',['pending','approved'])
+            ->update(['vr.status'=>'expired','vr.updated_at'=>now()]);
+    }
+
     public function create(Request $request)
     {
+        $this->cleanupExpiredGuests();
         $data = $request->validate([
             'phase' => ['required', 'string', 'max:50'],
             'block_number' => ['required', 'string', 'max:50'],
@@ -165,6 +176,7 @@ class VisitorController extends Controller
 
     public function preRegister(Request $request)
     {
+        $this->cleanupExpiredGuests();
         [$user, $residentId] = $this->residentUser($request);
 
         $data = $request->validate([
@@ -272,6 +284,7 @@ class VisitorController extends Controller
 
     public function status($credential)
     {
+        $this->cleanupExpiredGuests();
         $row = DB::table('visitor_credentials')
             ->where('visitor_id', strtoupper($credential))
             ->first();
@@ -300,6 +313,28 @@ class VisitorController extends Controller
         ];
     }
 
+    public function revoke(Request $request, int $id)
+    {
+        [$user, $residentId] = $this->residentUser($request);
+        $guest = DB::table('visitor_requests')->where('id',$id)->where('resident_id',$residentId)->first();
+        abort_unless($guest,404,'Guest record not found.');
+        abort_unless(in_array($guest->status,['pending','approved'],true),422,'This guest credential cannot be revoked.');
+        DB::table('visitor_requests')->where('id',$id)->update(['status'=>'revoked','updated_at'=>now()]);
+        ActivityLogger::log($request,$user,'revoke_guest','Revoked guest credential for '.$guest->visitor_name.'.');
+        return ['ok'=>true,'message'=>'Guest credential revoked.'];
+    }
+
+    public function guestHistory(Request $request)
+    {
+        $this->cleanupExpiredGuests();
+        [, $residentId] = $this->residentUser($request);
+        $requests=DB::table('visitor_requests as vr')->leftJoin('visitor_credentials as vc','vc.visitor_request_id','=','vr.id')
+            ->select('vr.id','vr.visitor_name','vr.purpose_of_visit','vr.status','vr.stay_days','vr.created_at','vc.visitor_id','vc.expires_at')
+            ->where('vr.resident_id',$residentId)->orderByDesc('vr.id')->limit(200)->get();
+        $logs=DB::table('gate_logs')->where('resident_id',$residentId)->whereNotNull('visitor_request_id')->orderByDesc('id')->limit(200)->get();
+        return ['ok'=>true,'guests'=>$requests,'gate_events'=>$logs];
+    }
+
     private function residentUser(Request $request)
     {
         $user = DB::table('users')->where('id', $request->session()->get('user_id'))->first();
@@ -311,6 +346,7 @@ class VisitorController extends Controller
 
     public function requests(Request $request)
     {
+        $this->cleanupExpiredGuests();
         [, $residentId] = $this->residentUser($request);
         return response()->json([
             'ok' => true,

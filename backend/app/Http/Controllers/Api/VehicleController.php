@@ -37,7 +37,7 @@ class VehicleController
             'color' => ['nullable', 'string', 'max:64'],
         ]);
 
-        $data['plate_number'] = strtoupper($data['plate_number']);
+        $data['plate_number'] = isset($data['plate_number']) ? strtoupper($data['plate_number']) : null;
         
         if ($user->role === 'resident') {
             $residentId = DB::table('residents')->where('user_id', $user->id)->value('id');

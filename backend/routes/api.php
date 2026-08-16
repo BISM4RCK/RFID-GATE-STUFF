@@ -11,7 +11,8 @@ use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\RfidController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\SystemHealthController;
-Route::get('/health', fn()=>['ok'=>true,'service'=>'smart-gate','version'=>'60']);
+use App\Http\Controllers\Api\BackupController;
+Route::get('/health', fn()=>['ok'=>true,'service'=>'smart-gate','version'=>'62']);
 Route::middleware([StartSession::class, RestoreAuthSession::class, PersistentAuth::class])->group(function(){
     Route::post('/auth/login',[AuthController::class,'login']);
     Route::post('/auth/logout',[AuthController::class,'logout']);
@@ -36,9 +37,17 @@ Route::middleware([StartSession::class, RestoreAuthSession::class, PersistentAut
     Route::get('/admin/rfid-cards',[StaffController::class,'rfidCards']);
     Route::get('/admin/account-logs',[StaffController::class,'accountLogs']);
     Route::get('/admin/system-health',[SystemHealthController::class,'index']);
+    Route::get('/admin/device-management',[SystemHealthController::class,'devices']);
+    Route::post('/admin/device-management/restart',[SystemHealthController::class,'restart']);
+    Route::get('/admin/backup',[BackupController::class,'export']);
+    Route::post('/admin/backup/restore',[BackupController::class,'restore']);
+    Route::get('/admin/export-account-logs',[StaffController::class,'exportAccountLogs']);
     Route::delete('/admin/account-logs',[StaffController::class,'deleteAccountLogs']);
     Route::delete('/admin/gate-logs',[StaffController::class,'deleteGateLogs']);
     Route::get('/staff/alerts',[StaffController::class,'alerts']);
+    Route::get('/staff/incidents',[StaffController::class,'incidents']);
+    Route::get('/staff/stats',[StaffController::class,'stats']);
+    Route::get('/staff/export-gate-logs',[StaffController::class,'exportGateLogs']);
     Route::post('/admin/vehicles/manage',[StaffController::class,'manageVehicle']);
     Route::get('/resident/visitor-requests',[VisitorController::class,'requests']);
     Route::get('/resident/notifications',[VisitorController::class,'notifications']);
@@ -46,6 +55,8 @@ Route::middleware([StartSession::class, RestoreAuthSession::class, PersistentAut
     Route::post('/resident/visitor-requests/{id}/approve',[VisitorController::class,'approve']);
     Route::post('/resident/visitor-requests/{id}/reject',[VisitorController::class,'reject']);
     Route::post('/resident/visitors',[VisitorController::class,'preRegister']);
+    Route::post('/resident/guest/{id}/revoke',[VisitorController::class,'revoke']);
+    Route::get('/resident/guest-history',[VisitorController::class,'guestHistory']);
     Route::post('/gate/override/{command}/acknowledge',[GateController::class,'acknowledge']);
     Route::get('/vehicles',[VehicleController::class,'index']);
     Route::post('/vehicles',[VehicleController::class,'store']);
