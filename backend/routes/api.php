@@ -54,6 +54,7 @@ Route::middleware([StartSession::class, RestoreAuthSession::class, PersistentAut
     Route::post('/resident/notifications/{id}/read',[VisitorController::class,'markNotificationRead']);
     Route::post('/resident/visitor-requests/{id}/approve',[VisitorController::class,'approve']);
     Route::post('/resident/visitor-requests/{id}/reject',[VisitorController::class,'reject']);
+    Route::delete('/resident/visitor-requests/{id}',[VisitorController::class,'deleteRequest']);
     Route::post('/resident/visitors',[VisitorController::class,'preRegister']);
     Route::post('/resident/guest/{id}/revoke',[VisitorController::class,'revoke']);
     Route::get('/resident/guest-history',[VisitorController::class,'guestHistory']);

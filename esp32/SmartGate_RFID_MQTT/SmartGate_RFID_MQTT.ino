@@ -5,6 +5,7 @@
 #include <PubSubClient.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <ArduinoJson.h>
 
 const char* WIFI_SSID = "TP_link1";
 const char* WIFI_PASSWORD = "Benq2877";
@@ -21,6 +22,7 @@ constexpr uint8_t SYS_GREEN=13, SYS_RED=14, RELAY=27;
 constexpr uint32_t GATE_MS=2500, LED_MS=1500, HEARTBEAT_MS=5000, COMMAND_POLL_MS=1000;
 const char* FIRMWARE_VERSION = "61.0";
 constexpr uint16_t COOLDOWN=650;
+constexpr uint32_t HTTP_TIMEOUT_MS=5000, MQTT_RETRY_MS=5000;
 
 MFRC522 entryReader(ENTRY_SS, RST_PIN);
 MFRC522 exitReader(EXIT_SS, RST_PIN);
@@ -29,7 +31,7 @@ WiFiClient mqttNet;
 PubSubClient mqtt(mqttNet);
 
 unsigned long gateUntil=0, entryLedUntil=0, exitLedUntil=0;
-unsigned long lastEntryScan=0, lastExitScan=0, lastHeartbeat=0, lastCommandPoll=0;
+unsigned long lastEntryScan=0, lastExitScan=0, lastHeartbeat=0, lastCommandPoll=0, lastMqttAttempt=0;
 
 String uid(MFRC522& reader) {
     String value;
@@ -55,8 +57,18 @@ void setLeds(bool entryGate, bool approved) {
     else exitLedUntil = millis() + LED_MS;
 }
 
+void ensureWiFi() {
+    if (WiFi.status() == WL_CONNECTED) return;
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+}
+
+bool mqttEnabled() {
+    return MQTT_HOST && String(MQTT_HOST).length() > 0 && String(MQTT_HOST) != "CHANGE_ME_MQTT_BROKER";
+}
+
 void mqttEvent(const String& reader, const String& value) {
-    if (!mqtt.connected()) return;
+    if (!mqttEnabled() || !mqtt.connected()) return;
     String topic = String("smartgate/") + DEVICE_ID + "/rfid/" + reader;
     String payload = String("{\"uid\":\"") + value + "\",\"reader\":\"" + reader + "\"}";
     mqtt.publish(topic.c_str(), payload.c_str());
@@ -67,6 +79,7 @@ bool authorize(const String& reader, const String& value) {
     HTTPClient http;
     String url = String(BASE_URL) + "/api/esp32/rfid/scan";
     if (!http.begin(tls, url)) return false;
+    http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     http.addHeader("X-SmartGate-Device", DEVICE_KEY);
     String body = "device_id=" + String(DEVICE_ID) + "&rfid_uid=" + value + "&reader=" + reader;
@@ -81,6 +94,7 @@ void completeCommand(const String& id) {
     HTTPClient http;
     String url = String(BASE_URL) + "/api/esp32/gate/commands/" + id + "/complete";
     if (!http.begin(tls, url)) return;
+    http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("X-SmartGate-Device", DEVICE_KEY);
     http.POST("");
     http.end();
@@ -91,29 +105,39 @@ void pollCommands() {
     HTTPClient http;
     String url = String(BASE_URL) + "/api/esp32/gate/commands";
     if (!http.begin(tls, url)) return;
+    http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("X-SmartGate-Device", DEVICE_KEY);
-    int code = http.GET();
+    const int code = http.GET();
     if (code >= 200 && code < 300) {
-        String body = http.getString();
-        int pos = 0;
-        while ((pos = body.indexOf("\"id\":", pos)) >= 0) {
-            int idStart = pos + 5;
-            int idEnd = body.indexOf(',', idStart);
-            if (idEnd < 0) break;
-            String id = body.substring(idStart, idEnd);
-            int gatePos = body.indexOf("\"gate\":\"", pos);
-            int cmdPos = body.indexOf("\"command\":\"open\"", pos);
-            int restartPos = body.indexOf("\"command\":\"restart_device\"", pos);
-            int nextObject = body.indexOf("}", pos);
-            if (restartPos >= 0 && (nextObject < 0 || restartPos < nextObject)) {
-                completeCommand(id);
-                delay(50);
-                ESP.restart();
-            } else if (gatePos >= 0 && (nextObject < 0 || gatePos < nextObject) && cmdPos >= 0 && (nextObject < 0 || cmdPos < nextObject)) {
-                openGate();
-                completeCommand(id);
+        const String body = http.getString();
+        DynamicJsonDocument doc(8192);
+        const DeserializationError error = deserializeJson(doc, body);
+        if (!error) {
+            JsonArray commands = doc["commands"].as<JsonArray>();
+            for (JsonObject command : commands) {
+                const String id = String((unsigned long)(command["id"] | 0));
+                const String commandName = command["command"] | "";
+                if (!id.length()) continue;
+
+                if (commandName == "restart_device") {
+                    completeCommand(id);
+                    delay(100);
+                    ESP.restart();
+                }
+
+                if (commandName == "open") {
+                    const char* gate = command["payload"]["gate"] | "";
+                    const bool entryGate = String(gate) == "entry";
+                    const bool exitGate = String(gate) == "exit";
+                    if (!entryGate && !exitGate) {
+                        completeCommand(id);
+                        continue;
+                    }
+                    openGate();
+                    setLeds(entryGate, true);
+                    completeCommand(id);
+                }
             }
-            pos = idEnd + 1;
         }
     }
     http.end();
@@ -124,6 +148,7 @@ void heartbeat() {
     HTTPClient http;
     String url = String(BASE_URL) + "/api/esp32/heartbeat";
     if (!http.begin(tls, url)) return;
+    http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     http.addHeader("X-SmartGate-Device", DEVICE_KEY);
     String ip = WiFi.localIP().toString();
@@ -165,15 +190,21 @@ void setup() {
     exitReader.PCD_SetAntennaGain(MFRC522::RxGain_max);
 
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     tls.setInsecure();
-    mqtt.setServer(MQTT_HOST, MQTT_PORT);
+    if (mqttEnabled()) mqtt.setServer(MQTT_HOST, MQTT_PORT);
 }
 
 void loop() {
     if (WiFi.status() != WL_CONNECTED) {
         digitalWrite(SYS_GREEN, LOW);
         digitalWrite(SYS_RED, HIGH);
+        if (millis() - lastHeartbeat >= 5000) {
+            lastHeartbeat = millis();
+            ensureWiFi();
+        }
         delay(50);
         return;
     }
@@ -181,10 +212,13 @@ void loop() {
     digitalWrite(SYS_GREEN, HIGH);
     digitalWrite(SYS_RED, LOW);
 
-    if (!mqtt.connected()) {
-        mqtt.connect((String("smartgate-") + DEVICE_ID).c_str());
+    if (mqttEnabled()) {
+        if (!mqtt.connected() && millis() - lastMqttAttempt >= MQTT_RETRY_MS) {
+            lastMqttAttempt = millis();
+            mqtt.connect((String("smartgate-") + DEVICE_ID).c_str());
+        }
+        mqtt.loop();
     }
-    mqtt.loop();
 
     scanCard("entry", entryReader, true, lastEntryScan);
     scanCard("exit", exitReader, false, lastExitScan);

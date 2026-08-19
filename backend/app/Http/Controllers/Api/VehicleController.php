@@ -42,10 +42,6 @@ class VehicleController
         if ($user->role === 'resident') {
             $residentId = DB::table('residents')->where('user_id', $user->id)->value('id');
             abort_unless($residentId, 422, 'Resident profile not found.');
-            if ($data['vehicle_type'] === 'ebike') {
-                abort_unless(!empty($data['plate_number']), 422, 'Custom e-bike plate is required.');
-            }
-
             abort_if(Vehicle::where('resident_id', $residentId)->count() >= 20, 422, 'Vehicle limit reached.');
             $data['resident_id'] = $residentId;
             $vehicle = Vehicle::create($data);
@@ -59,6 +55,24 @@ class VehicleController
         $vehicle = UserVehicle::create($data);
         ActivityLogger::log($request, $user, 'add_vehicle', 'Added staff vehicle ' . $vehicle->plate_number);
         return response()->json($vehicle, 201);
+    }
+
+    private function generateUniqueEbikePlate(): string
+    {
+        for ($attempt = 0; $attempt < 50; $attempt++) {
+            $letters = '';
+            for ($i = 0; $i < 4; $i++) {
+                $letters .= chr(random_int(65, 90));
+            }
+            $plate = $letters . ' ' . str_pad((string) random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+            $exists = DB::table('vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('user_vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('visitor_request_vehicles')->where('plate_number', $plate)->exists();
+            if (!$exists) {
+                return $plate;
+            }
+        }
+        abort(500, 'Unable to generate a unique e-bike plate.');
     }
 
     public function destroy(Request $request, $id)

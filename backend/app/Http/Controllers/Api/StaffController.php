@@ -514,7 +514,7 @@ class StaffController extends Controller
 
         $username = strtoupper(trim($data['username']));
         $password = strtoupper(substr(bin2hex(random_bytes(4)),0,8)) . '!';
-        $fullName = trim($data['full_name']);
+        $fullName = ucwords(strtolower(trim(preg_replace('/\s+/', ' ', $data['full_name']))));
 
         $userId = DB::transaction(function () use ($data, $username, $password, $fullName) {
             $id = DB::table('users')->insertGetId([
@@ -584,21 +584,11 @@ class StaffController extends Controller
             ->join('users as u','u.id','=','r.user_id')
             ->select('u.id','u.full_name','u.username','u.email','u.role','u.status','u.locked_until','u.last_login_at','u.is_super_admin',
                      'r.phase','r.block_number','r.lot_number','r.household_letter','r.house_number')
-            ->orderBy('r.phase')->orderBy('r.block_number')->orderBy('r.lot_number')->orderBy('r.household_letter')->get()
-            ->map(function($x){
-                $lastActivity = DB::table('sessions')->where('user_id',$x->id)->max('last_activity');
-                $x->online = $lastActivity ? (time() - (int)$lastActivity) <= 300 : false;
-                return $x;
-            });
+            ->orderBy('r.phase')->orderBy('r.block_number')->orderBy('r.lot_number')->orderBy('r.household_letter')->get();
         $staff = DB::table('users as u')
             ->leftJoin('guards as g','g.user_id','=','u.id')
             ->select('u.id','u.full_name','u.username','u.email','u.role','u.status','u.locked_until','u.last_login_at','u.is_super_admin','g.gate_assignment')
-            ->whereIn('u.role',['guard','admin'])->orderBy('u.role')->orderBy('u.full_name')->get()
-            ->map(function($x){
-                $lastActivity = DB::table('sessions')->where('user_id',$x->id)->max('last_activity');
-                $x->online = $lastActivity ? (time() - (int)$lastActivity) <= 300 : false;
-                return $x;
-            });
+            ->whereIn('u.role',['guard','admin'])->orderBy('u.role')->orderBy('u.full_name')->get();
         return response()->json(['ok'=>true,'residents'=>$residents,'staff'=>$staff]);
     }
 
@@ -622,22 +612,39 @@ class StaffController extends Controller
             abort_unless($profile,422,'Resident profile not found.');
             $plate=$data['plate_number'] ?? null;
             if ($data['vehicle_type']==='ebike') {
-                $plate=strtoupper(substr($target->username ?: strtok($target->email,'@'),0,3))
-                    .preg_replace('/[^0-9]/','',(string)($profile->phase ?? '0'))
-                    .'-'.($profile->block_number ?? '0')
-                    .'-'.($profile->lot_number ?? '0')
-                    .'-'.strtoupper($profile->household_letter ?? 'A');
+                $plate=$this->generateUniqueEbikePlate();
             }
             abort_unless($data['vehicle_type']==='ebike' || !empty($plate),422,'Plate number is required.');
             $id=DB::table('vehicles')->insertGetId(['resident_id'=>$profile->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'status'=>'active','created_at'=>now(),'updated_at'=>now()]);
         } else {
             abort_unless(in_array($target->role,['guard','admin']),422,'Select a valid account.');
             $plate=$data['plate_number'] ?? null;
+            if ($data['vehicle_type']==='ebike') {
+                $plate=$this->generateUniqueEbikePlate();
+            }
             abort_unless(!empty($plate),422,'Plate number is required.');
             $id=DB::table('user_vehicles')->insertGetId(['user_id'=>$target->id,'plate_number'=>strtoupper($plate),'vehicle_type'=>$data['vehicle_type'],'color'=>$data['color']??null,'created_at'=>now()]);
         }
         ActivityLogger::log($request,$admin,'admin_add_vehicle',"Added {$data['vehicle_type']} to {$target->email}: ".($plate??''));
         return response()->json(['ok'=>true,'id'=>$id,'plate_number'=>strtoupper($plate??'')],201);
+    }
+
+    private function generateUniqueEbikePlate(): string
+    {
+        for ($attempt = 0; $attempt < 50; $attempt++) {
+            $letters = '';
+            for ($i = 0; $i < 4; $i++) {
+                $letters .= chr(random_int(65, 90));
+            }
+            $plate = $letters . ' ' . str_pad((string) random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+            $exists = DB::table('vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('user_vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('visitor_request_vehicles')->where('plate_number', $plate)->exists();
+            if (!$exists) {
+                return $plate;
+            }
+        }
+        abort(500, 'Unable to generate a unique e-bike plate.');
     }
 
     public function accountAction(Request $request, int $id, string $action)

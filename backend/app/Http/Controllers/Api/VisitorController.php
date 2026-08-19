@@ -20,6 +20,24 @@ class VisitorController extends Controller
             ->update(['vr.status'=>'expired','vr.updated_at'=>now()]);
     }
 
+    private function generateUniqueEbikePlate(): string
+    {
+        for ($attempt = 0; $attempt < 50; $attempt++) {
+            $letters = '';
+            for ($i = 0; $i < 4; $i++) {
+                $letters .= chr(random_int(65, 90));
+            }
+            $plate = $letters . ' ' . str_pad((string) random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+            $exists = DB::table('vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('user_vehicles')->where('plate_number', $plate)->exists()
+                || DB::table('visitor_request_vehicles')->where('plate_number', $plate)->exists();
+            if (!$exists) {
+                return $plate;
+            }
+        }
+        abort(500, 'Unable to generate a unique e-bike plate.');
+    }
+
     public function create(Request $request)
     {
         $this->cleanupExpiredGuests();
@@ -45,6 +63,12 @@ class VisitorController extends Controller
         ]);
 
         $vehicles = $data['vehicles'] ?? [];
+        foreach ($vehicles as &$vehicle) {
+            if (($vehicle['vehicle_type'] ?? null) === 'ebike') {
+                $vehicle['plate_number'] = $this->generateUniqueEbikePlate();
+            }
+        }
+        unset($vehicle);
         if (!$vehicles && !empty($data['plate_number'])) {
             $vehicles = [['plate_number' => $data['plate_number'], 'vehicle_type' => $data['vehicle_type'] ?? 'other']];
         }
@@ -193,6 +217,13 @@ class VisitorController extends Controller
 
         $resident = DB::table('residents')->where('id', $residentId)->where('status', 'active')->first();
         abort_unless($resident, 403, 'Resident profile not found.');
+
+        foreach ($data['vehicles'] as &$vehicle) {
+            if (($vehicle['vehicle_type'] ?? null) === 'ebike') {
+                $vehicle['plate_number'] = $this->generateUniqueEbikePlate();
+            }
+        }
+        unset($vehicle);
 
         $plates = array_map(fn($v) => strtoupper(trim($v['plate_number'])), $data['vehicles']);
         if (count($plates) !== count(array_unique($plates))) {
@@ -350,9 +381,26 @@ class VisitorController extends Controller
         [, $residentId] = $this->residentUser($request);
         return response()->json([
             'ok' => true,
-            'requests' => DB::table('visitor_requests as vr')->leftJoin('visitor_credentials as vc','vc.visitor_request_id','=','vr.id')->select('vr.*','vc.visitor_id')->where('vr.resident_id', $residentId)->orderByDesc('vr.id')->limit(100)->get(),
+            'requests' => DB::table('visitor_requests as vr')->leftJoin('visitor_credentials as vc','vc.visitor_request_id','=','vr.id')->select('vr.*','vc.visitor_id')->where('vr.resident_id', $residentId)->whereNull('vr.deleted_at')->orderByDesc('vr.id')->limit(100)->get(),
             'unread_count' => DB::table('visitor_notifications')->where('resident_id',$residentId)->where('is_read',0)->count(),
         ]);
+    }
+
+    public function deleteRequest(Request $request, int $id)
+    {
+        [$user, $residentId] = $this->residentUser($request);
+        $guest = DB::table('visitor_requests')
+            ->where('id', $id)
+            ->where('resident_id', $residentId)
+            ->whereNull('deleted_at')
+            ->first();
+        abort_unless($guest, 404, 'Guest request not found.');
+        DB::table('visitor_requests')->where('id', $id)->update([
+            'deleted_at' => now(),
+            'updated_at' => now(),
+        ]);
+        ActivityLogger::log($request, $user, 'delete_guest_request', 'Deleted guest request #' . $id . ' for ' . $guest->visitor_name . '.');
+        return ['ok' => true, 'message' => 'Guest request deleted.'];
     }
 
     public function notifications(Request $request)

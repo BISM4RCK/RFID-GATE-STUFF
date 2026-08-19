@@ -98,13 +98,19 @@ class GateController extends Controller
     {
         $this->device($request);
 
+        $commands = DB::table('gate_commands')
+            ->where('status', 'pending')
+            ->orderBy('id')
+            ->limit(10)
+            ->get()
+            ->map(function ($command) {
+                $command->payload = json_decode($command->payload ?: '{}', true) ?: [];
+                return $command;
+            });
+
         return [
             'ok' => true,
-            'commands' => DB::table('gate_commands')
-                ->where('status', 'pending')
-                ->orderBy('id')
-                ->limit(10)
-                ->get(),
+            'commands' => $commands,
         ];
     }
 
